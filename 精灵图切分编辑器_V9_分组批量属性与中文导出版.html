@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>像素精灵图切分编辑器 V7</title>
+<title>像素精灵图切分编辑器 V9</title>
 <style>
 :root{color-scheme:dark;--bg:#101521;--panel:#192233;--panel2:#202c40;--line:#34445d;--text:#e9f1ff;--muted:#9aabc4;--blue:#69b7ff;--pink:#ff8fce}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,"Microsoft YaHei",sans-serif}
@@ -37,14 +37,33 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
 .preview-area canvas{max-width:none;image-rendering:pixelated}
 .refine-side{width:290px;flex:0 0 290px;padding:14px;overflow:auto;border-left:1px solid var(--line);background:var(--panel)}
 .refine-side .row>*{min-width:0}
+.inspect-list-side{width:235px;flex:0 0 235px;overflow:auto;padding:12px;background:#141e2e;border-right:1px solid var(--line)}
+.inspect-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.inspect-list .item{min-height:48px}.inspect-list .item small{white-space:nowrap}.inspect-list .item.active{border-color:var(--pink);background:#39283d}.inspect-list .item .itemname{font-size:12px}
+.inspect-list .layer-tag{font-size:10px;color:#9bb6d8;white-space:nowrap}
+@media(max-width:900px){.inspect-list-side{width:185px;flex-basis:185px}#inspectProperties{width:230px!important;flex-basis:230px!important}}
 .agent-side{display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);background:#141d2c}
 .agent-side input{max-width:320px}
 
 @media(max-width:950px){.app{grid-template-columns:220px minmax(280px,1fr);}.right{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);height:240px}.app{height:auto}.stage{height:65vh}.left{height:35vh}.right .list{max-height:120px}}
+
+.group-tools{display:grid;gap:6px;margin:8px 0;padding:8px;background:#111b2b;border:1px solid #34445d;border-radius:8px}
+.group-tools input,.group-tools select{width:100%;box-sizing:border-box;min-width:0}
+.inspect-list .item{position:relative;display:grid;grid-template-columns:18px 42px minmax(0,1fr) auto;gap:6px;align-items:center}
+.inspect-list .item .swatch{grid-column:2;grid-row:1 / span 3;width:42px;height:42px}
+.inspect-list .item .itemname{grid-column:3;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inspect-list .item small{grid-column:3;grid-row:2}
+.inspect-list .item .layer-tag{grid-column:3;grid-row:3;justify-self:start}
+.inspect-list .item .inspect-check{grid-column:1;grid-row:1 / span 3;width:15px;height:15px;margin:0}
+.inspect-list .item .item-actions{grid-column:4;grid-row:1 / span 3;display:flex;flex-direction:column;gap:3px}
+.inspect-list .item .item-actions button{padding:2px 5px;min-width:25px;font-size:11px}
+.inspect-list .item.is-hidden{opacity:.45}
+.inspect-list .item.is-locked{border-style:dashed}
+
 </style>
 </head>
 <body>
-<header><strong>✦ 像素精灵图切分编辑器 V7</strong><span>本地运行 · 图片不会上传</span><span id="filename" style="margin-left:auto">尚未载入图片</span></header>
+<header><strong>✦ 像素精灵图切分编辑器 V9</strong><span>本地运行 · 图片不会上传</span><span id="filename" style="margin-left:auto">尚未载入图片</span></header>
 <div class="app">
 <aside class="left">
 <section>
@@ -55,12 +74,14 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
 </section>
 <section>
 <h3>② 自动识别</h3>
+<label>识别方式</label><select id="detectMode"><option value="auto" selected>自动判断（透明图 / 不透明底图）</option><option value="alpha">透明通道 Alpha</option><option value="lightbg">浅色背景抠除（棋盘格 / 白底）</option></select>
 <label>Alpha 阈值：<b id="alphaVal">16</b></label><input id="alpha" type="range" min="0" max="255" value="16">
+<label>浅色背景亮度阈值：<b id="bgVal">220</b></label><input id="bgThreshold" type="range" min="160" max="250" value="220">
 <label>最小区域面积：<b id="areaVal">80</b> px</label><input id="area" type="range" min="1" max="3000" value="80">
 <label>外扩边距：<b id="padVal">4</b> px</label><input id="pad" type="range" min="0" max="32" value="4">
 <label>邻接方式</label><select id="conn"><option value="8">8 邻域（对角相连也算一体）</option><option value="4">4 邻域（仅上下左右相连）</option></select>
 <div class="row"><button class="primary" id="detect" disabled>自动识别区域</button><button id="clear" disabled>清空框选</button></div>
-<div class="hint">自动识别依据 Alpha 连通区域，不理解物体语义。相连的鱼、建筑或光效可能需要手动拆框。</div>
+<div class="hint">自动模式会先判断图片是否有透明通道；不透明图片则从画布边缘识别并移除浅色背景（适合白底、灰白棋盘格）。相互接触的物体仍可能需要手动拆分。</div>
 </section>
 <section>
 <h3>③ 视图与操作</h3>
@@ -75,7 +96,7 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
 <h3>④ Agent 元素识别与标注</h3>
 <div class="row"><button id="exportAgentTask" disabled>导出 Agent 任务包</button><button id="importAgentResult" disabled>导入 Agent 标注</button></div>
 <input id="agentJsonFile" type="file" accept="application/json" style="display:none">
-<div class="hint">将原图、候选选区和任务说明打包交给 Agent。Agent 可识别元素语义、命名、分类，并按 sprite ID 回传 JSON；导入后自动更新素材属性。</div>
+<div class="hint">将原图、候选选区和任务说明打包交给 Agent。Agent 可识别元素语义、命名、分类，并按 sprite ID 回传 JSON；导入后自动更新素材属性；若失败，主状态栏会显示具体原因。</div>
 <div id="agentStatus" class="hint">等待图片与切割区域。</div>
 </section>
 <section>
@@ -92,7 +113,7 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
 </section>
 </aside>
 <main class="stage">
-<div class="toolbar"><button id="minus">－</button><button id="plus">＋</button><button id="toggleBoxes">显示/隐藏框</button><button id="toggleImage">显示/隐藏原图</button><span class="muted" id="canvasInfo">等待导入图片</span></div>
+<div class="toolbar"><button id="minus">－</button><button id="plus">＋</button><button id="toggleBoxes">显示/隐藏框</button><button id="toggleImage">显示/隐藏原图</button><button id="layoutToolbar" disabled>场景布局标注</button><span class="muted" id="canvasInfo">等待导入图片</span></div>
 <div class="stagewrap" id="stagewrap"><div class="empty" id="empty">先从左侧选择一张精灵图</div><canvas id="canvas" hidden></canvas></div>
 <div class="status" id="status">就绪。支持自动识别、手动框选、智能选区精修和批量导出。</div>
 </main>
@@ -112,6 +133,19 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
 </div>
 <div class="row"><button id="apply" disabled>应用坐标</button><button id="center" disabled>定位到选中框</button></div>
 <div class="hint">坐标以原始图片左上角为 (0,0)，单位为像素。可在此精确修改。</div>
+</section>
+<section id="sceneLayoutSection">
+<h3>⑨ 场景布局还原</h3>
+<label>空间层级</label><select id="sceneLayer" disabled><option value="background">远景层 · Background</option><option value="midground" selected>中景层 · Midground</option><option value="foreground">近景层 · Foreground</option></select>
+<label>视差系数</label><input id="parallax" type="number" min="0" max="2" step="0.05" value="0.35" disabled>
+<div class="stat">
+ <div><small>锚点 X</small><input id="anchorX" type="number" disabled></div><div><small>锚点 Y</small><input id="anchorY" type="number" disabled></div>
+ <div><small>Z 顺序</small><input id="zIndex" type="number" disabled></div><div><small>深度 0–1</small><input id="depth" type="number" min="0" max="1" step="0.05" disabled></div>
+</div>
+<div class="row"><button id="layoutMode" disabled>开启布局标注</button><button id="applyLayer" disabled>应用标注</button></div>
+<div class="row"><button id="parallaxInspect" class="primary" disabled>打开场景检视 / 局部调整</button></div>
+<div class="hint">检视面板支持拖动局部部件、缩放视图和视差模拟。部件位置写入 transform，不修改原始 sourceRect。</div>
+<div id="layoutStatus" class="hint">导入图片并选中素材后可设置空间层级。</div>
 </section>
 <section>
 <h3>快捷操作</h3>
@@ -144,6 +178,56 @@ canvas{max-width:none;box-shadow:0 8px 30px #0008;image-rendering:pixelated;curs
     <button id="refineDone" style="width:100%">完成并返回</button>
    </div>
   </div>
+ </div>
+</div>
+<div class="modal" id="parallaxModal">
+ <div class="modal-card" style="width:min(1500px,98vw);height:min(94vh,1000px)">
+  <div class="modal-head"><strong>场景检视与局部调整 · 拖动部件 / 模拟视差</strong><div class="row" style="margin:0"><button id="parallaxReset">重置视角</button><button id="parallaxClose">关闭</button></div></div>
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#141d2c;border-bottom:1px solid var(--line)">
+   <label style="margin:0">检视模式</label><select id="inspectMode"><option value="edit">部件编辑</option><option value="parallax">视差模拟</option></select>
+   <label style="margin:0">模拟方向</label><select id="parallaxAxis"><option value="both">横向 + 纵向</option><option value="x">仅横向</option><option value="y">仅纵向</option></select>
+   <button id="inspectZoomOut">－</button><button id="inspectZoomIn">＋</button><button id="inspectFit">适应窗口</button>
+   <label style="margin:0">缩放部件</label><input id="inspectScale" type="number" min="0.1" max="5" step="0.05" value="1" style="width:76px">
+   <label style="margin:0">旋转°</label><input id="inspectRotation" type="number" min="-180" max="180" step="1" value="0" style="width:72px"><button id="inspectApplyTransform">应用变换</button>
+   <label style="margin:0">移动幅度</label><input id="parallaxRange" type="range" min="30" max="260" value="150" style="width:150px">
+   <span id="parallaxRangeValue" class="muted">150 px</span>
+   <label style="margin:0"><input id="parallaxReference" type="checkbox"> 显示原始位置参考</label>
+   <label style="margin:0"><input id="inspectGrid" type="checkbox" checked> 网格</label>
+   <span class="muted" id="parallaxReadout" style="margin-left:auto">摄像机 X: 0 · Y: 0</span>
+  </div>
+  <div style="display:flex;flex:1;min-height:0;min-width:0">
+   <aside class="inspect-list-side">
+    <h3 style="margin:0 0 4px">部件列表 <span id="inspectListCount" class="muted">(0)</span></h3>
+    <div class="hint">重叠部件可直接从这里选择。勾选多个部件后可创建分组并统一调整属性。</div>
+    <div class="group-tools">
+     <input id="inspectGroupName" type="text" placeholder="新分组名称" aria-label="新分组名称">
+     <button id="createInspectGroup">将勾选项编组</button>
+     <select id="inspectGroupSelect" aria-label="选择分组"><option value="">选择分组…</option></select>
+     <button id="applyInspectGroup">统一应用组属性</button>
+     <div class="hint">组属性使用右侧面板中的层级、视差、深度、Z、缩放和旋转数值。</div>
+    </div>
+    <div class="inspect-list" id="inspectList"><div class="empty">尚无部件</div></div>
+   </aside>
+   <div id="parallaxStage" style="flex:1;min-width:0;min-height:0;overflow:auto;display:grid;place-items:center;padding:16px;background-color:#0d1320;background-image:radial-gradient(#25334a 1px,transparent 1px);background-size:18px 18px;cursor:grab;touch-action:none">
+    <canvas id="parallaxCanvas" style="max-width:none;max-height:none;image-rendering:pixelated;box-shadow:0 8px 30px #0008"></canvas>
+   </div>
+   <aside id="inspectProperties" style="width:270px;flex:0 0 270px;overflow:auto;padding:14px;background:#182337;border-left:1px solid var(--line);color:#e8eef8">
+    <h3 style="margin:0 0 12px">选中部件属性</h3>
+    <div class="hint" id="inspectNoSelection">在画布中点击一个部件以编辑属性。</div>
+    <label>素材名称</label><input id="inspectName" type="text" style="width:100%;box-sizing:border-box">
+    <label>空间层级</label><select id="inspectLayer" style="width:100%"><option value="background">远景层</option><option value="midground">中景层</option><option value="foreground">近景层</option></select>
+    <label>视差系数</label><input id="inspectParallax" type="number" min="0" max="2" step="0.05" style="width:100%;box-sizing:border-box">
+    <div class="stat" style="grid-template-columns:1fr 1fr">
+     <div><small>锚点 X</small><input id="inspectAnchorX" type="number"></div><div><small>锚点 Y</small><input id="inspectAnchorY" type="number"></div>
+     <div><small>Z 顺序</small><input id="inspectZ" type="number"></div><div><small>深度 0–1</small><input id="inspectDepth" type="number" min="0" max="1" step="0.05"></div>
+    </div>
+    <label>场景位置 X / Y</label><div class="row"><input id="inspectPosX" type="number"><input id="inspectPosY" type="number"></div>
+    <label>缩放 / 旋转</label><div class="row"><input id="inspectScaleSide" type="number" min="0.1" max="5" step="0.05"><input id="inspectRotationSide" type="number" min="-180" max="180" step="1"></div>
+    <button id="inspectApplyProperties" class="primary" style="width:100%;margin-top:12px">应用属性</button>
+    <div class="hint">属性直接作用于当前选中部件。原始裁切坐标保持不变；场景位置、锚点、层级和变换独立保存。</div>
+   </aside>
+  </div>
+  <div class="agent-side"><span class="muted" id="inspectHelp">部件编辑：拖动选中素材调整位置；滚轮缩放视图；空格/中键拖动画布。位置修改会写入场景变换，不改变原始裁切坐标。</span><span id="inspectSelection" class="muted"></span></div>
  </div>
 </div>
 <div id="overlapDialog" style="display:none;position:fixed;inset:0;background:#050a12dd;z-index:20;align-items:center;justify-content:center;padding:20px">
@@ -220,14 +304,38 @@ function select(i){
  selected=i;const s=sprites[i];const enabled=!!s;
  ['name','category','description','x','y','w','h','apply','center','delete','refine'].forEach(id=>$(id).disabled=!enabled);
  if(s){$('name').value=s.name;$('category').value=s.category||'';$('description').value=s.description||'';$('x').value=s.x;$('y').value=s.y;$('w').value=s.w;$('h').value=s.h}
- refreshList();draw();
+ refreshList();draw();syncSceneControls();
+ if($('parallaxModal')?.style.display==='flex')drawParallax();
 }
 function autoDetect(){
- if(!img)return;const w=img.naturalWidth,h=img.naturalHeight,c=document.createElement('canvas');c.width=w;c.height=h;
+ if(!img)return;const w=img.naturalWidth,h=img.naturalHeight,n=w*h,c=document.createElement('canvas');c.width=w;c.height=h;
  const cx=c.getContext('2d',{willReadFrequently:true});cx.drawImage(img,0,0);const d=cx.getImageData(0,0,w,h).data;
- const threshold=+$('alpha').value,minArea=+$('area').value,pad=+$('pad').value,conn=+$('conn').value;
- const active=new Uint8Array(w*h),seen=new Uint8Array(w*h),q=new Int32Array(w*h),found=[];
- for(let i=0;i<w*h;i++)active[i]=d[i*4+3]>threshold?1:0;
+ const minArea=+$('area').value,pad=+$('pad').value,conn=+$('conn').value;
+ const requested=$('detectMode').value,alphaThreshold=+$('alpha').value,bgThreshold=+$('bgThreshold').value;
+ let alphaHasTransparency=false;
+ if(requested==='auto'||requested==='alpha'){
+  for(let i=3;i<d.length;i+=4){if(d[i]<255){alphaHasTransparency=true;break}}
+ }
+ const mode=requested==='auto'?(alphaHasTransparency?'alpha':'lightbg'):requested;
+ const active=new Uint8Array(n),seen=new Uint8Array(n),q=new Int32Array(n),found=[];
+ if(mode==='alpha'){
+  for(let i=0;i<n;i++)active[i]=d[i*4+3]>alphaThreshold?1:0;
+ }else{
+  // 不透明底图：只从画布边缘向内 flood-fill 连通的浅色、中性背景。
+  // 这样背景中的棋盘格会被整体移除，物体内部的白色高光不会被误删。
+  const bgCandidate=new Uint8Array(n),background=new Uint8Array(n);
+  for(let i=0;i<n;i++){
+   const k=i*4,r=d[k],g=d[k+1],b=d[k+2],mx=Math.max(r,g,b),mn=Math.min(r,g,b),sat=mx-mn;
+   bgCandidate[i]=(mx>=bgThreshold && sat<=24)?1:0;
+  }
+  let head=0,tail=0;
+  const pushBg=i=>{if(!background[i]&&bgCandidate[i]){background[i]=1;q[tail++]=i}};
+  for(let x=0;x<w;x++){pushBg(x);pushBg((h-1)*w+x)}
+  for(let y=1;y<h-1;y++){pushBg(y*w);pushBg(y*w+w-1)}
+  const bdirs=[[-1,0],[1,0],[0,-1],[0,1]];
+  while(head<tail){const z=q[head++],x=z%w,y=(z/w)|0;for(const [dx,dy] of bdirs){const nx=x+dx,ny=y+dy;if(nx<0||ny<0||nx>=w||ny>=h)continue;pushBg(ny*w+nx)}}
+  for(let i=0;i<n;i++)active[i]=background[i]?0:1;
+ }
  const dirs=conn===8?[[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]]:[[0,-1],[-1,0],[1,0],[0,1]];
  let componentId=0;
  for(let y=0;y<h;y++)for(let x=0;x<w;x++){const st=y*w+x;if(seen[st]||!active[st])continue;
@@ -242,7 +350,8 @@ function autoDetect(){
   }
  }
  found.sort((a,b)=>a.y-b.y||a.x-b.x);sprites=found.map((s,i)=>({...s,name:`sprite_${String(i+1).padStart(3,'0')}`}));select(sprites.length?0:-1);
- say(`自动识别完成：找到 ${sprites.length} 个连通区域，并保存了每个区域的像素归属蒙版。`);
+ const modeLabel=mode==='alpha'?'Alpha 透明通道':'边缘连通浅色背景抠除';
+ say(`自动识别完成（${modeLabel}）：找到 ${sprites.length} 个独立连通区域。若多个物体相连，可切换 4 邻域或手动拆分。`);
 }
 function addDownload(blob,name){const a=document.createElement('a');const u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500)}
 function cropCanvas(s){
@@ -302,20 +411,105 @@ function closeRefinePanel(){
  refinePanelOpen=false;refineMode=false;stage.style.display='';updateZoom(clamp(+$('zoom').value,10,300));refreshList();draw();
 }
 function agentTask(){
- const task={schema:'sprite-agent-task/v1',instructions:'识别每个候选选区对应的实际图像元素。为每个 sprite_id 提供简洁、准确的中文名称、英文文件名建议、分类、描述和 tags。不要改变坐标、尺寸或 mask。无法判断时标记 needs_review。返回 JSON：{schema:\"sprite-agent-result/v1\",sprites:[{sprite_id,name,slug,category,description,tags,confidence,review_status}]}。分类建议：character, creature, prop, architecture, background, terrain, vegetation, effect, UI, other。',source:{filename:imgName,width:img.naturalWidth,height:img.naturalHeight},sprites:sprites.map((sp,i)=>({sprite_id:`sprite_${String(i+1).padStart(3,'0')}`,name:sp.name,bbox:{x:sp.x,y:sp.y,width:sp.w,height:sp.h},category:sp.category||'',description:sp.description||'',mask_available:!!sp.mask}))};
- return task;
+ const instructions=`你是 2D 游戏场景素材的空间标注 Agent。请根据 source.png 和候选框，为每个 sprite_id 标注语义与空间布局。
+
+必须遵守：
+1. sprite_id 是唯一关联键；不得新增、删除或合并候选素材。
+2. 严禁修改 bbox/sourceRect 的 x、y、width、height；这些是编辑器给出的原图像素坐标，必须原样保留。
+3. anchor 使用 source.png 的全局像素坐标（不是素材局部坐标）；默认建议落在物体底部中心、平台接触面或合适的场景支点。无法判断时用 bbox 底边中心。
+4. layer 只能是 background（远景）、midground（中景）、foreground（近景）。按视觉深度判断，不要仅按画面上下位置判断。
+5. depth 范围 0..1：远景通常较大（约 0.75-1.0），中景约 0.4-0.75，近景约 0-0.4。它表达空间深度，不是屏幕 Y 坐标。
+6. parallax 范围 0..2：远景通常 0.2-0.5，中景 0.55-0.8，近景 0.85-1.2。只给建议值，用户可在编辑器中调整。
+7. zIndex 是绘制顺序整数：远景通常 0-9，中景 10-19，近景 20-29；若实际遮挡关系需要，可在相邻范围内调整。数值越大越靠前。
+8. relations 只填写有把握的关系，数组元素必须使用其他候选的 sprite_id。nearTo 表示空间邻近，attachedTo 表示附着，supports 表示承托/可站立支撑。不要凭空编造关系。
+9. 不确定的字段不要猜测，使用 null、空数组，并将 reviewStatus 标记为 needs_review；confidence 为 0..1。
+10. name 用简洁中文名称；slug 用英文 snake_case；category 从 character, creature, prop, architecture, background, terrain, vegetation, effect, UI, other 中选择。
+
+只返回合法 JSON，不要 Markdown、解释或代码围栏。严格使用以下结构：
+{
+  "schema": "spatial-scene-agent-result/v2",
+  "source": {"width": 0, "height": 0},
+  "sprites": [{
+    "sprite_id": "sprite_001",
+    "name": "中央浮岛",
+    "slug": "central_floating_island",
+    "category": "terrain",
+    "description": "...",
+    "tags": ["浮岛", "瀑布"],
+    "anchor": {"x": 0, "y": 0},
+    "layout": {"layer": "midground", "depth": 0.6, "parallax": 0.7, "zIndex": 10},
+    "relations": {"nearTo": [], "attachedTo": [], "supports": []},
+    "confidence": 0.9,
+    "reviewStatus": "ok"
+  }]
+}
+`;
+ return {schema:'spatial-scene-agent-task/v2',instructions,source:{filename:imgName,width:img.naturalWidth,height:img.naturalHeight,coordinateOrigin:'top-left',coordinateUnits:'source-pixels'},sprites:sprites.map((sp,i)=>({sprite_id:`sprite_${String(i+1).padStart(3,'0')}`,name:sp.name,bbox:{x:sp.x,y:sp.y,width:sp.w,height:sp.h},category:sp.category||'',description:sp.description||'',currentLayout:{layer:sp.layer||'midground',depth:sp.depth??null,parallax:sp.parallax??null,zIndex:sp.zIndex??null,anchor:sp.anchor||null},mask_available:!!sp.mask}))};
 }
 async function exportAgentTask(){
  if(!img||!sprites.length){say('请先导入图片并生成选区。');return}
  const task=agentTask(),png=await new Promise(r=>{const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;c.getContext('2d').drawImage(img,0,0);c.toBlob(r,'image/png')});
  const files=[{name:'source.png',data:new Uint8Array(await png.arrayBuffer())},{name:'agent_task.json',data:new TextEncoder().encode(JSON.stringify(task,null,2))},{name:'AGENT_PROMPT.txt',data:new TextEncoder().encode(task.instructions)}];
- addDownload(zipStore(files),`${safe(imgName)}_agent_task.zip`);$('agentStatus').textContent=`已导出 Agent 任务包，包含原图与 ${sprites.length} 个候选选区。Agent 返回 sprite-agent-result/v1 JSON 后可导入。`;
+ addDownload(zipStore(files),`${safe(imgName)}_agent_task_v2.zip`);$('agentStatus').textContent=`已导出 Agent v2 任务包，包含原图与 ${sprites.length} 个候选选区。请返回 spatial-scene-agent-result/v2 JSON。`;
 }
 function importAgentResultData(data){
- if(!data||data.schema!=='sprite-agent-result/v1'||!Array.isArray(data.sprites))throw new Error('JSON schema 不正确，应为 sprite-agent-result/v1');
- let updated=0;
- data.sprites.forEach(row=>{const m=String(row.sprite_id||'').match(/(\d+)/);if(!m)return;const i=Number(m[1])-1;if(i<0||i>=sprites.length)return;const sp=sprites[i];if(row.name)sp.name=String(row.name);if(row.category)sp.category=String(row.category);if(row.description)sp.description=String(row.description);if(Array.isArray(row.tags))sp.tags=row.tags.map(String);if(Number.isFinite(row.confidence))sp.confidence=row.confidence;if(row.review_status)sp.review_status=String(row.review_status);updated++});
- refreshList();select(selected);$('agentStatus').textContent=`已导入 Agent 标注：更新 ${updated}/${sprites.length} 个元素的名称、分类和描述。`;say('Agent 元素识别与命名结果已应用。');
+ const v2=data&&data.schema==='spatial-scene-agent-result/v2';
+ const v1=data&&data.schema==='sprite-agent-result/v1';
+ if((!v2&&!v1)||!Array.isArray(data.sprites))throw new Error('JSON 格式不匹配：顶层 schema 必须是 spatial-scene-agent-result/v2，且 sprites 必须是数组。');
+ if(!img||!sprites.length)throw new Error('请先载入原图并完成自动识别或手动框选，再导入 Agent JSON。');
+ if(data.source&&Number.isFinite(data.source.width)&&Number.isFinite(data.source.height)){
+  if(data.source.width!==img.naturalWidth||data.source.height!==img.naturalHeight)throw new Error(`原图尺寸不一致：JSON 为 ${data.source.width}×${data.source.height}，当前图片为 ${img.naturalWidth}×${img.naturalHeight}。请使用本次导出的 Agent 任务包。`);
+ }
+ const idToIndex=new Map(sprites.map((sp,i)=>[`sprite_${String(i+1).padStart(3,'0')}`,i]));
+ let updated=0,spatialUpdated=0,unmatched=0,invalid=0;
+ data.sprites.forEach(row=>{
+  if(!row||typeof row!=='object'){invalid++;return}
+  const sid=String(row.sprite_id||row.id||'');
+  let i=idToIndex.has(sid)?idToIndex.get(sid):-1;
+  if(i<0){const m=sid.match(/^sprite[_-]?(\d+)$/i);if(m)i=Number(m[1])-1;}
+  if(i<0||i>=sprites.length){unmatched++;return}
+  const sp=sprites[i];
+  if(row.name!==undefined&&row.name!==null&&String(row.name).trim())sp.name=String(row.name).trim();
+  if(row.category!==undefined&&row.category!==null&&String(row.category).trim())sp.category=String(row.category).trim();
+  if(row.description!==undefined&&row.description!==null)sp.description=String(row.description);
+  if(row.slug!==undefined&&row.slug!==null)sp.slug=String(row.slug);
+  if(Array.isArray(row.tags))sp.tags=row.tags.map(String);
+  if(Number.isFinite(row.confidence))sp.confidence=clamp(row.confidence,0,1);
+  if(row.reviewStatus||row.review_status)sp.review_status=String(row.reviewStatus||row.review_status);
+  const layout=row.layout||row.currentLayout||{};
+  const layer=layout.layer||row.layer;
+  if(['background','midground','foreground'].includes(layer)){
+   sp.layer=layer;
+   if(!Number.isFinite(layout.parallax)&&!Number.isFinite(row.parallax))sp.parallax={background:0.35,midground:0.70,foreground:1.00}[layer];
+  }
+  const anchor=row.anchor||layout.anchor;
+  if(anchor&&Number.isFinite(anchor.x)&&Number.isFinite(anchor.y))sp.anchor={x:clamp(anchor.x,0,img.naturalWidth),y:clamp(anchor.y,0,img.naturalHeight)};
+  const depth=layout.depth??row.depth;
+  const parallax=layout.parallax??row.parallax;
+  const zIndex=layout.zIndex??layout.z_index??row.zIndex??row.z_index;
+  if(Number.isFinite(depth))sp.depth=clamp(depth,0,1);
+  if(Number.isFinite(parallax))sp.parallax=clamp(parallax,0,2);
+  if(Number.isFinite(zIndex))sp.zIndex=clamp(Math.round(zIndex),-1000,1000);
+  const rel=row.relations;
+  if(rel&&typeof rel==='object')sp.relations={
+   nearTo:Array.isArray(rel.nearTo)?rel.nearTo.map(String):(Array.isArray(rel.near_to)?rel.near_to.map(String):[]),
+   attachedTo:Array.isArray(rel.attachedTo)?rel.attachedTo.map(String):(Array.isArray(rel.attached_to)?rel.attached_to.map(String):[]),
+   supports:Array.isArray(rel.supports)?rel.supports.map(String):[]
+  };
+  if(row.transform&&typeof row.transform==='object')sp.transform={...(sp.transform||{}),...row.transform};
+  updated++;
+  if(v2&&(anchor||Object.keys(layout).length||rel))spatialUpdated++;
+ });
+ if(!updated)throw new Error(`没有匹配到任何素材。收到 ${data.sprites.length} 条记录；请检查 sprite_id 是否与本次导出的任务包一致（如 sprite_001）。`);
+ refreshList();select(selected);
+ const msg=`Agent ${v2?'v2':'v1'} 导入完成：成功 ${updated} 条，空间属性 ${spatialUpdated} 条，未匹配 ${unmatched} 条，无效 ${invalid} 条。原始裁切坐标未修改。`;
+ $('agentStatus').textContent=msg;say(msg);
+ return {updated,spatialUpdated,unmatched,invalid};
+}
+function parseAgentJsonText(text){
+ let raw=String(text||'').replace(/^\uFEFF/,'').trim();
+ raw=raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+ return JSON.parse(raw);
 }
 function rectIntersection(a,b){const x=Math.max(a.x,b.x),y=Math.max(a.y,b.y),r=Math.min(a.x+a.w,b.x+b.w),bt=Math.min(a.y+a.h,b.y+b.h);return r>x&&bt>y?{x,y,w:r-x,h:bt-y}:null}
 function overlapComponents(){
@@ -360,7 +554,7 @@ function previewOverlapCanvas(el,items,mode='after'){
 }
 function showOverlapPreview(r){pendingOverlap=r;$('overlapSummary').textContent=`检测到 ${r.pairs.length} 组矩形交集；预计剔除 ${r.removed} 个周边像素；保护 ${r.protectedN} 个冲突像素；${r.conflicts} 个连通区域需要复核。`;$('overlapConflicts').textContent=r.conflicts?'黄色框表示有归属冲突，清理算法不会强制拆分这些连通区域。':'没有检测到需要保护的连通区域冲突。';previewOverlapCanvas($('beforePreview'),sprites,'before');previewOverlapCanvas($('afterPreview'),r.proposals,'after');$('overlapDialog').style.display='flex'}
 function applyOverlapCleanup(){if(!pendingOverlap)return;const r=pendingOverlap;r.proposals.forEach((s,i)=>{if(s.emptyAfterCleanup)s.mask=new Uint8Array(s.w*s.h);sprites[i]=s});pendingOverlap=null;$('overlapDialog').style.display='none';select(Math.min(selected,sprites.length-1));$('overlapStats').textContent=`已清理：剔除 ${r.removed} 像素，保护冲突 ${r.protectedN} 像素。`;say(`重叠区域清理已应用：处理 ${r.pairs.length} 组矩形交集，剔除 ${r.removed} 个像素。`)}
-function manifest(){return {source:imgName,imageWidth:img.naturalWidth,imageHeight:img.naturalHeight,coordinateOrigin:"top-left",sprites:sprites.map((s,i)=>({index:i+1,name:s.name,category:s.category||'uncategorized',description:s.description||'',x:s.x,y:s.y,width:s.w,height:s.h,shape:s.points?'polygon':'rectangle',...(s.points?{points:s.points}:{}),file:`${String(i+1).padStart(3,'0')}_${safe(s.name)}.png`}))}}
+function manifest(){return {format:"spatial-scene-layout/v2",source:imgName,canvas:{width:img.naturalWidth,height:img.naturalHeight,coordinateOrigin:"top-left",units:"source-pixels"},layoutMode:"source-coordinate-preserving",sprites:sprites.map((s,i)=>{const layer=s.layer||"midground",a=s.anchor||{x:Math.round(s.x+s.w/2),y:Math.round(s.y+s.h)};return {id:`sprite_${String(i+1).padStart(3,"0")}`,index:i+1,name:s.name||`sprite_${i+1}`,category:s.category||"uncategorized",description:s.description||"",group:s.group||null,visible:s.visible!==false,locked:!!s.locked,sourceRect:{x:s.x,y:s.y,width:s.w,height:s.h},anchor:{x:a.x,y:a.y},layout:{layer,depth:s.depth??(layer==="background"?.85:layer==="foreground"?.15:.5),parallax:s.parallax??layerDefaults[layer]??.7,zIndex:s.zIndex??(layer==="background"?0:layer==="foreground"?20:10)},transform:{x:(s.sceneX??s.x)-s.x,y:(s.sceneY??s.y)-s.y,scaleX:s.sceneScaleX??1,scaleY:s.sceneScaleY??1,rotation:s.sceneRotation??0},relations:s.relations||{nearTo:[],attachedTo:[],supports:[]},shape:s.points?"polygon":"rectangle",...(s.points?{points:s.points}:{}),file:`${String(i+1).padStart(3,"0")}_${safe(s.name)}.png`}})}}
 function safe(s){return (s||'sprite').replace(/[\\/:*?"<>|]/g,'_').replace(/\s+/g,'_')}
 function crc32(data){let c=~0;for(let i=0;i<data.length;i++){c^=data[i];for(let k=0;k<8;k++)c=(c>>>1)^((c&1)?0xedb88320:0)}return (c^~0)>>>0}
 function zipStore(files){
@@ -368,9 +562,9 @@ function zipStore(files){
  const u16=n=>[n&255,(n>>>8)&255],u32=n=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];
  for(const f of files){
   const name=enc.encode(f.name),data=f.data instanceof Uint8Array?f.data:new Uint8Array(f.data),crc=crc32(data);
-  const lh=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...name]);
+  const lh=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...name]);
   local.push(lh,data);
-  const ch=new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset),...name]);
+  const ch=new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset),...name]);
   central.push(ch);offset+=lh.length+data.length;
  }
  const centralSize=central.reduce((n,a)=>n+a.length,0),end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(centralSize),...u32(offset),...u16(0)]);
@@ -388,7 +582,7 @@ $('file').onchange=e=>{const f=e.target.files[0];if(!f)return;imgName=f.name.rep
 $('refine').onclick=()=>openRefinePanel();$('refineRun').onclick=runGrabCut;$('fgSeed').onclick=()=>{seedMode='fg';say('保留笔刷已选：在主体内部涂抹绿色笔迹。')};$('bgSeed').onclick=()=>{seedMode='bg';say('排除笔刷已选：在多余周边元素上涂抹红色笔迹。')};$('clearSeeds').onclick=()=>{seeds=[];seedStroke=null;draw();say('已清除精修笔迹。')};$('undoRefine').onclick=()=>{if(selected>=0){sprites[selected].mask=undoMask?new Uint8Array(undoMask):null;undoMask=null;$('undoRefine').disabled=true;draw();say('已撤销上一次智能精修。')}};
 $('brush').oninput=e=>$('brushVal').textContent=e.target.value;
 $('detect').onclick=()=>{snapshot();autoDetect()};$('clear').onclick=()=>{snapshot();sprites=[];select(-1);say('已清空所有框选。')};
-$('alpha').oninput=e=>$('alphaVal').textContent=e.target.value;$('area').oninput=e=>$('areaVal').textContent=e.target.value;$('pad').oninput=e=>$('padVal').textContent=e.target.value;
+$('alpha').oninput=e=>$('alphaVal').textContent=e.target.value;$('bgThreshold').oninput=e=>$('bgVal').textContent=e.target.value;$('area').oninput=e=>$('areaVal').textContent=e.target.value;$('pad').oninput=e=>$('padVal').textContent=e.target.value;
 $('zoom').oninput=e=>updateZoom(e.target.value);$('plus').onclick=()=>updateZoom(clamp(+$('zoom').value+10,10,300));$('minus').onclick=()=>updateZoom(clamp(+$('zoom').value-10,10,300));
 $('fit').onclick=()=>{if(!img)return;updateZoom(Math.max(10,Math.min(300,Math.floor(Math.min((stage.clientWidth-50)/img.naturalWidth,(stage.clientHeight-50)/img.naturalHeight)*100))))};
 $('reset').onclick=()=>{pan={x:0,y:0};$('fit').click()};
@@ -407,7 +601,7 @@ $('previewZoomIn').onclick=()=>{previewZoom=Math.min(4,previewZoom*1.25);drawLar
 $('previewBoxes').onclick=()=>{previewShowBoxes=!previewShowBoxes;$('previewBoxes').textContent=previewShowBoxes?'隐藏选区框':'显示选区框';drawLargePreview()};
 $('refineClose').onclick=$('refineDone').onclick=closeRefinePanel;
 $('exportAgentTask').onclick=exportAgentTask;$('importAgentResult').onclick=()=>$('agentJsonFile').click();
-$('agentJsonFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{importAgentResultData(JSON.parse(await f.text()))}catch(err){$('agentStatus').textContent='导入失败：'+err.message}e.target.value=''};
+$('agentJsonFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;const startMsg=`正在读取 ${f.name}…`;$('agentStatus').textContent=startMsg;say(startMsg);try{const data=parseAgentJsonText(await f.text());const r=importAgentResultData(data);$('agentStatus').textContent+=` 文件：${f.name}`;}catch(err){const msg='导入失败：'+(err&&err.message?err.message:String(err));$('agentStatus').textContent=msg;say(msg);console.error('Agent JSON import failed:',err);alert(msg)}finally{e.target.value=''}};
 $('exportZip').onclick=exportZip;$('exportJson').onclick=exportJson;$('exportPngs').onclick=exportPngs;
 canvas.addEventListener('pointerdown',e=>{
  if(!img)return;canvas.setPointerCapture(e.pointerId);const p=screenToImage(e);
@@ -457,6 +651,188 @@ canvas.addEventListener('pointerup',e=>{
 window.addEventListener('keydown',e=>{if(e.code==='Space'){spaceDown=true;e.preventDefault()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return}if(e.key==='Delete'&&selected>=0){snapshot();sprites.splice(selected,1);select(Math.min(selected,sprites.length-1))}});
 window.addEventListener('keyup',e=>{if(e.code==='Space')spaceDown=false});
 const wheelZoom=e=>{e.preventDefault();zoomAt(e,e.deltaY)};stage.addEventListener('wheel',wheelZoom,{passive:false});$('refineArea').addEventListener('wheel',wheelZoom,{passive:false});$('previewArea').addEventListener('wheel',e=>{e.preventDefault();previewZoom=clamp(previewZoom*(e.deltaY<0?1.12:0.89),.05,5);drawLargePreview()},{passive:false});
+
+// Spatial Scene Layout + Parallax Inspector
+let sceneLayoutMode=false;
+const layerDefaults={background:0.35,midground:0.70,foreground:1.00};
+function defaultAnchor(s){return {x:Math.round(s.x+s.w/2),y:Math.round(s.y+s.h)}}
+function syncSceneControls(){
+ const s=sprites[selected],on=!!img;
+ ['sceneLayer','parallax','applyLayer','anchorX','anchorY','zIndex','depth'].forEach(id=>$(id).disabled=!s);
+ $('layoutMode').disabled=!on;$('layoutToolbar').disabled=!on;$('parallaxInspect').disabled=!on||!sprites.length;
+ if(s){const a=s.anchor||defaultAnchor(s);$('sceneLayer').value=s.layer||'midground';$('parallax').value=s.parallax??layerDefaults[s.layer||'midground'];$('anchorX').value=a.x;$('anchorY').value=a.y;$('zIndex').value=s.zIndex??(s.layer==='background'?0:s.layer==='foreground'?20:10);$('depth').value=s.depth??(s.layer==='background'?0.85:s.layer==='foreground'?0.15:0.5)}
+ $('layoutStatus').textContent=s?`当前：${s.name||'未命名'} · ${s.layer||'midground'} · 原图 (${s.x}, ${s.y}) · 锚点 (${s.anchor?.x??defaultAnchor(s).x}, ${s.anchor?.y??defaultAnchor(s).y})`:'选中一个素材以编辑空间属性。';
+}
+const baseSelect=select;
+select=function(i){baseSelect(i);syncSceneControls()};
+$('sceneLayer').addEventListener('change',()=>{$('parallax').value=layerDefaults[$('sceneLayer').value];const l=$('sceneLayer').value;$('zIndex').value=l==='background'?0:l==='foreground'?20:10;$('depth').value=l==='background'?.85:l==='foreground'?.15:.5});
+$('applyLayer').addEventListener('click',()=>{
+ const s=sprites[selected];if(!s)return;snapshot();s.layer=$('sceneLayer').value;s.parallax=clamp(Number($('parallax').value)||0,0,2);s.anchor={x:clamp(Number($('anchorX').value)||0,0,img.naturalWidth),y:clamp(Number($('anchorY').value)||0,0,img.naturalHeight)};s.zIndex=clamp(Number($('zIndex').value)||0,-1000,1000);s.depth=clamp(Number($('depth').value)||0,0,1);
+ refreshList();draw();syncSceneControls();say(`已应用空间标注：${s.name} · ${s.layer} · Z ${s.zIndex}`);
+});
+function toggleLayoutMode(){sceneLayoutMode=!sceneLayoutMode;$('layoutMode').textContent=sceneLayoutMode?'关闭布局标注':'开启布局标注';$('layoutToolbar').textContent=sceneLayoutMode?'退出布局标注':'场景布局标注';$('layoutStatus').textContent=sceneLayoutMode?'布局标注已开启：显示层级、原图坐标和锚点。':'布局标注已关闭。';draw()}
+$('layoutMode').addEventListener('click',toggleLayoutMode);$('layoutToolbar').addEventListener('click',toggleLayoutMode);
+const baseDraw=draw;
+draw=function(){baseDraw();if(!sceneLayoutMode||!img||refinePanelOpen)return;sprites.forEach(s=>{const color=s.layer==='background'?'#77bfff':s.layer==='foreground'?'#ffb36b':'#71e0b1',a=s.anchor||defaultAnchor(s);ctx.save();ctx.strokeStyle=color;ctx.lineWidth=2/zoom;ctx.setLineDash([7/zoom,4/zoom]);ctx.strokeRect(s.x,s.y,s.w,s.h);ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(a.x-7/zoom,a.y);ctx.lineTo(a.x+7/zoom,a.y);ctx.moveTo(a.x,a.y-7/zoom);ctx.lineTo(a.x,a.y+7/zoom);ctx.stroke();ctx.font=`${12/zoom}px sans-serif`;ctx.fillStyle=color;ctx.fillText(`${s.layer||'midground'} · (${s.x},${s.y}) · Z${s.zIndex??0}`,s.x+3/zoom,s.y+s.h-4/zoom);ctx.restore()})};
+const baseSetEnabled=setEnabled;setEnabled=function(on){baseSetEnabled(on);$('layoutMode').disabled=!on;$('layoutToolbar').disabled=!on;$('parallaxInspect').disabled=!on||!sprites.length};
+// V8 scene inspector: editable layout transforms + parallax preview.
+const pc=$('parallaxCanvas'),pctx=pc.getContext('2d'),pstage=$('parallaxStage');
+let cam={x:0,y:0},pdrag=null,pfit=1,inspectZoom=1,inspectPan={x:0,y:0},inspectSelected=selected;
+function layerFactor(s){const l=s.layer||'midground';return Number.isFinite(Number(s.parallax))?Number(s.parallax):layerDefaults[l]}
+function scenePos(s){return {x:s.sceneX??s.x,y:s.sceneY??s.y}}
+function sceneScale(s){return {x:s.sceneScaleX??1,y:s.sceneScaleY??1}}
+function sceneRotation(s){return s.sceneRotation??0}
+function transformedBounds(s){
+ const p=scenePos(s),sc=sceneScale(s),cx=s.w/2,cy=s.h/2;
+ const w=s.w*Math.abs(sc.x),h=s.h*Math.abs(sc.y);
+ return {x:p.x+cx-w/2,y:p.y+cy-h/2,w,h};
+}
+function drawInspectorSprite(target,s,dx=0,dy=0){
+ const c=cropCanvas(s),p=scenePos(s),sc=sceneScale(s),cx=s.w/2,cy=s.h/2;
+ target.save();target.translate(p.x+cx+dx,p.y+cy+dy);target.rotate(sceneRotation(s)*Math.PI/180);target.scale(sc.x,sc.y);target.drawImage(c,-cx,-cy);target.restore();
+}
+function syncInspectorProperties(){
+ const s=sprites[selected],ids=['inspectName','inspectLayer','inspectParallax','inspectAnchorX','inspectAnchorY','inspectZ','inspectDepth','inspectPosX','inspectPosY','inspectScaleSide','inspectRotationSide','inspectApplyProperties'];
+ ids.forEach(id=>$(id).disabled=!s);
+ $('inspectNoSelection').style.display=s?'none':'block';
+ if(!s)return;
+ const layer=s.layer||'midground',a=s.anchor||defaultAnchor(s),sc=sceneScale(s);
+ $('inspectName').value=s.name||'';
+ $('inspectLayer').value=layer;
+ $('inspectParallax').value=s.parallax??layerDefaults[layer]??layerDefaults.midground;
+ $('inspectAnchorX').value=a.x;$('inspectAnchorY').value=a.y;
+ $('inspectZ').value=s.zIndex??(layer==='background'?0:layer==='foreground'?20:10);
+ $('inspectDepth').value=s.depth??(layer==='background'?0.85:layer==='foreground'?0.15:0.5);
+ $('inspectPosX').value=scenePos(s).x;$('inspectPosY').value=scenePos(s).y;
+ $('inspectScaleSide').value=sc.x;$('inspectRotationSide').value=sceneRotation(s);
+}
+let inspectMultiSelection=new Set();
+function refreshInspectGroups(){
+ const sel=$('inspectGroupSelect'),current=sel.value;const names=[...new Set(sprites.map(s=>s.group).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+ sel.innerHTML='<option value="">选择分组…</option>';names.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;sel.append(o)});if(names.includes(current))sel.value=current;
+}
+function renderInspectList(){
+ const list=$('inspectList');if(!list)return;
+ $('inspectListCount').textContent=`(${sprites.length})`;
+ refreshInspectGroups();list.innerHTML='';
+ if(!sprites.length){list.innerHTML='<div class="empty">尚无部件</div>';return}
+ sprites.forEach((s,i)=>{
+  const el=document.createElement('div');el.className='item'+(i===selected?' active':'')+(s.visible===false?' is-hidden':'')+(s.locked?' is-locked':'');el.setAttribute('role','group');
+  const check=document.createElement('input');check.type='checkbox';check.className='inspect-check';check.checked=inspectMultiSelection.has(i);check.title='加入批量分组选择';check.addEventListener('click',e=>e.stopPropagation());check.addEventListener('change',()=>{check.checked?inspectMultiSelection.add(i):inspectMultiSelection.delete(i)});
+  const sw=document.createElement('canvas');sw.className='swatch';sw.width=60;sw.height=60;const sc=sw.getContext('2d');if(img){const thumb=cropCanvas(s);sc.drawImage(thumb,0,0,60,60)}
+  const nm=document.createElement('div');nm.className='itemname';nm.textContent=s.name||`sprite_${i+1}`;
+  const meta=document.createElement('small');meta.textContent=`#${i+1} · ${s.w}×${s.h}${s.group?' · '+s.group:''}`;
+  const layer=document.createElement('span');layer.className='layer-tag';layer.textContent=({background:'远景',midground:'中景',foreground:'近景'}[s.layer]||'中景');
+  const actions=document.createElement('div');actions.className='item-actions';
+  const vis=document.createElement('button');vis.type='button';vis.textContent=s.visible===false?'显':'隐';vis.title=s.visible===false?'显示部件':'隐藏部件';vis.addEventListener('click',e=>{e.stopPropagation();s.visible=s.visible===false?true:false;drawParallax()});
+  const lock=document.createElement('button');lock.type='button';lock.textContent=s.locked?'解锁':'锁';lock.title=s.locked?'解锁部件':'锁定部件';lock.addEventListener('click',e=>{e.stopPropagation();s.locked=!s.locked;drawParallax()});
+  const up=document.createElement('button');up.type='button';up.textContent='↑';up.title='提高绘制层级';up.addEventListener('click',e=>{e.stopPropagation();s.zIndex=(s.zIndex??(s.layer==='foreground'?20:s.layer==='background'?0:10))+1;drawParallax()});
+  const down=document.createElement('button');down.type='button';down.textContent='↓';down.title='降低绘制层级';down.addEventListener('click',e=>{e.stopPropagation();s.zIndex=(s.zIndex??(s.layer==='foreground'?20:s.layer==='background'?0:10))-1;drawParallax()});
+  actions.append(vis,lock,up,down);el.append(check,sw,nm,meta,layer,actions);
+  el.addEventListener('click',()=>{select(i);const active=list.querySelector('.item.active');active?.scrollIntoView({block:'nearest'})});
+  list.append(el);
+ });
+}
+$('createInspectGroup').addEventListener('click',()=>{
+ const ids=[...inspectMultiSelection].filter(i=>sprites[i]);const name=$('inspectGroupName').value.trim();
+ if(!name){say('请先输入分组名称。');return}if(!ids.length){say('请先勾选至少一个部件。');return}
+ snapshot();ids.forEach(i=>sprites[i].group=name);inspectMultiSelection.clear();$('inspectGroupName').value='';$('inspectGroupSelect').value=name;drawParallax();say(`已创建分组「${name}」，包含 ${ids.length} 个部件。`);
+});
+$('inspectGroupSelect').addEventListener('change',()=>{const name=$('inspectGroupSelect').value;const i=sprites.findIndex(s=>s.group===name);if(i>=0)select(i)});
+$('applyInspectGroup').addEventListener('click',()=>{
+ const name=$('inspectGroupSelect').value;if(!name){say('请先选择一个分组。');return}
+ const members=sprites.filter(s=>s.group===name);if(!members.length)return;snapshot();
+ const layer=$('inspectLayer').value,parallax=clamp(Number($('inspectParallax').value)||0,0,2),depth=clamp(Number($('inspectDepth').value)||0,0,1),z=clamp(Number($('inspectZ').value)||0,-1000,1000),scale=clamp(Number($('inspectScaleSide').value)||1,.1,5),rotation=clamp(Number($('inspectRotationSide').value)||0,-180,180);
+ members.forEach(s=>{s.layer=layer;s.parallax=parallax;s.depth=depth;s.zIndex=z;s.sceneScaleX=scale;s.sceneScaleY=scale;s.sceneRotation=rotation});drawParallax();say(`已将「${name}」的 ${members.length} 个部件统一应用层级、视差、深度、Z 顺序、缩放和旋转。`);
+});
+
+function drawParallax(){
+ if(!img)return;
+ renderInspectList();
+ syncInspectorProperties();
+ const W=img.naturalWidth,H=img.naturalHeight;
+ pc.width=W;pc.height=H;
+ pc.style.width=Math.max(1,Math.round(W*inspectZoom))+'px';
+ pc.style.height=Math.max(1,Math.round(H*inspectZoom))+'px';
+ pfit=inspectZoom;
+ pctx.clearRect(0,0,W,H);
+ if($('inspectGrid').checked){pctx.save();pctx.strokeStyle='rgba(130,160,200,.12)';pctx.lineWidth=1/inspectZoom;for(let x=0;x<=W;x+=32){pctx.beginPath();pctx.moveTo(x,0);pctx.lineTo(x,H);pctx.stroke()}for(let y=0;y<=H;y+=32){pctx.beginPath();pctx.moveTo(0,y);pctx.lineTo(W,y);pctx.stroke()}pctx.restore()}
+ if($('parallaxReference').checked){pctx.save();pctx.globalAlpha=.14;pctx.drawImage(img,0,0);pctx.restore()}
+ const mode=$('inspectMode').value;
+ const ordered=sprites.map((s,i)=>({s,i})).sort((a,b)=>{const za=a.s.zIndex??(a.s.layer==='background'?0:a.s.layer==='foreground'?20:10),zb=b.s.zIndex??(b.s.layer==='background'?0:b.s.layer==='foreground'?20:10);return za-zb||a.i-b.i});
+ ordered.forEach(({s,i})=>{
+  if(s.visible===false)return;
+  const f=mode==='parallax'?layerFactor(s):0,dx=-cam.x*f,dy=-cam.y*f;
+  drawInspectorSprite(pctx,s,dx,dy);
+  if(i===selected){const b=transformedBounds(s);pctx.save();pctx.strokeStyle='#ff8fce';pctx.lineWidth=2/inspectZoom;pctx.setLineDash([7/inspectZoom,4/inspectZoom]);pctx.strokeRect(b.x+dx,b.y+dy,b.w,b.h);pctx.restore()}
+ });
+ $('parallaxReadout').textContent=mode==='parallax'?`摄像机 X: ${Math.round(cam.x)} · Y: ${Math.round(cam.y)}`:`编辑缩放：${Math.round(inspectZoom*100)}%`;
+ $('inspectSelection').textContent=selected>=0&&sprites[selected]?`当前：${sprites[selected].name||'sprite_'+(selected+1)} · 位置 ${Math.round(scenePos(sprites[selected]).x)}, ${Math.round(scenePos(sprites[selected]).y)}`:'未选中部件';
+ if(selected>=0&&sprites[selected]){$('inspectScale').value=sceneScale(sprites[selected]).x;$('inspectRotation').value=sceneRotation(sprites[selected])}
+ $('inspectHelp').textContent=mode==='edit'?'部件编辑：拖动素材调整位置；滚轮缩放视图；空格/中键拖动画布。':'视差模拟：拖动画布模拟摄像机；切换回「部件编辑」可直接调整素材。';
+}
+function openParallax(){if(!img||!sprites.length)return;cam={x:0,y:0};inspectZoom=Math.min((pstage.clientWidth-32)/img.naturalWidth,(pstage.clientHeight-32)/img.naturalHeight,1);inspectZoom=Math.max(.08,inspectZoom);$('inspectMode').value='edit';$('parallaxModal').style.display='flex';requestAnimationFrame(drawParallax)}
+$('parallaxInspect').addEventListener('click',openParallax);
+$('parallaxClose').addEventListener('click',()=>$('parallaxModal').style.display='none');
+$('parallaxReset').addEventListener('click',()=>{cam={x:0,y:0};inspectPan={x:0,y:0};$('inspectMode').value='edit';fitInspector();drawParallax()});
+$('parallaxRange').addEventListener('input',()=>{$('parallaxRangeValue').textContent=$('parallaxRange').value+' px';drawParallax()});
+$('parallaxAxis').addEventListener('change',()=>{const a=$('parallaxAxis').value;if(a==='x')cam.y=0;if(a==='y')cam.x=0;drawParallax()});
+$('parallaxReference').addEventListener('change',drawParallax);
+$('inspectGrid').addEventListener('change',drawParallax);
+$('inspectMode').addEventListener('change',()=>{cam={x:0,y:0};drawParallax()});
+function fitInspector(){if(!img)return;inspectZoom=Math.min((pstage.clientWidth-32)/img.naturalWidth,(pstage.clientHeight-32)/img.naturalHeight,1);inspectZoom=Math.max(.08,inspectZoom);pc.style.width=Math.round(img.naturalWidth*inspectZoom)+'px';pc.style.height=Math.round(img.naturalHeight*inspectZoom)+'px';drawParallax()}
+$('inspectFit').addEventListener('click',fitInspector);
+$('inspectZoomIn').addEventListener('click',()=>{inspectZoom=Math.min(4,inspectZoom*1.2);drawParallax()});
+$('inspectZoomOut').addEventListener('click',()=>{inspectZoom=Math.max(.08,inspectZoom/1.2);drawParallax()});
+$('inspectApplyTransform').addEventListener('click',()=>{if(selected<0||!sprites[selected])return;snapshot();const s=sprites[selected],v=clamp(Number($('inspectScale').value)||1,.1,5);s.sceneScaleX=v;s.sceneScaleY=v;s.sceneRotation=clamp(Number($('inspectRotation').value)||0,-180,180);drawParallax();say('已应用部件缩放与旋转；原始素材和裁切坐标未修改。')});
+$('inspectApplyProperties').addEventListener('click',()=>{
+ if(selected<0||!sprites[selected])return;
+ snapshot();const s=sprites[selected],layer=$('inspectLayer').value;
+ s.name=$('inspectName').value||s.name;s.layer=layer;s.parallax=clamp(Number($('inspectParallax').value)||0,0,2);
+ s.anchor={x:clamp(Number($('inspectAnchorX').value)||0,0,img.naturalWidth),y:clamp(Number($('inspectAnchorY').value)||0,0,img.naturalHeight)};
+ s.zIndex=clamp(Number($('inspectZ').value)||0,-1000,1000);s.depth=clamp(Number($('inspectDepth').value)||0,0,1);
+ s.sceneX=Number($('inspectPosX').value)||0;s.sceneY=Number($('inspectPosY').value)||0;
+ const sc=clamp(Number($('inspectScaleSide').value)||1,.1,5);s.sceneScaleX=sc;s.sceneScaleY=sc;s.sceneRotation=clamp(Number($('inspectRotationSide').value)||0,-180,180);
+ refreshList();drawParallax();syncSceneControls();say('已从检视工作台应用部件属性。');
+});
+let inspectorSpace=false;
+window.addEventListener('keydown',e=>{if(e.code==='Space'&&$('parallaxModal').style.display==='flex'){inspectorSpace=true;e.preventDefault()}});
+window.addEventListener('keyup',e=>{if(e.code==='Space')inspectorSpace=false});
+pc.addEventListener('pointerdown',e=>{
+ if($('parallaxModal').style.display!=='flex')return;
+ const rect=pc.getBoundingClientRect(),x=(e.clientX-rect.left)/inspectZoom,y=(e.clientY-rect.top)/inspectZoom;
+ if($('inspectMode').value==='edit'&&!inspectorSpace&&e.button===0){
+  let hit=-1;
+  const sorted=sprites.map((s,i)=>({s,i})).sort((a,b)=>(b.s.zIndex??0)-(a.s.zIndex??0));
+  for(const o of sorted){if(o.s.visible===false||o.s.locked)continue;const b=transformedBounds(o.s);if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){hit=o.i;break}}
+  if(hit>=0){select(hit);inspectSelected=hit;snapshot();pdrag={type:'sprite',sx:x,sy:y,orig:{...scenePos(sprites[hit])},index:hit};pc.setPointerCapture(e.pointerId);drawParallax();return}
+ }
+ if(inspectorSpace||e.button===1||$('inspectMode').value==='parallax'){
+  if(inspectorSpace||e.button===1){pdrag={type:'stagepan',sx:e.clientX,sy:e.clientY,sl:pstage.scrollLeft,st:pstage.scrollTop};pstage.setPointerCapture(e.pointerId)}else{pdrag={type:'camera',sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y};pc.setPointerCapture(e.pointerId)}return;
+ }
+});
+pc.addEventListener('pointermove',e=>{
+ if(!pdrag)return;
+ if(pdrag.type==='stagepan'){pstage.scrollLeft=pdrag.sl-(e.clientX-pdrag.sx);pstage.scrollTop=pdrag.st-(e.clientY-pdrag.sy);return}
+ if(pdrag.type==='sprite'&&sprites[pdrag.index]&&!sprites[pdrag.index].locked){
+  const dx=(e.clientX-pc.getBoundingClientRect().left)/inspectZoom-pdrag.sx;
+  const dy=(e.clientY-pc.getBoundingClientRect().top)/inspectZoom-pdrag.sy;
+  const s=sprites[pdrag.index];s.sceneX=pdrag.orig.x+dx;s.sceneY=pdrag.orig.y+dy;drawParallax();return;
+ }
+ if(pdrag.type==='camera'){
+  const axis=$('parallaxAxis').value,range=Number($('parallaxRange').value);
+  const dx=(e.clientX-pdrag.sx)/inspectZoom,dy=(e.clientY-pdrag.sy)/inspectZoom;
+  cam.x=axis==='y'?0:clamp(pdrag.cx-dx,-range,range);cam.y=axis==='x'?0:clamp(pdrag.cy-dy,-range,range);drawParallax();
+ }
+});
+pstage.addEventListener('pointerdown',e=>{if(e.target===pc)return;if(inspectorSpace||e.button===1){pdrag={type:'stagepan',sx:e.clientX,sy:e.clientY,sl:pstage.scrollLeft,st:pstage.scrollTop};pstage.setPointerCapture(e.pointerId)}});
+pstage.addEventListener('pointermove',e=>{if(!pdrag||pdrag.type!=='stagepan')return;pstage.scrollLeft=pdrag.sl-(e.clientX-pdrag.sx);pstage.scrollTop=pdrag.st-(e.clientY-pdrag.sy)});
+pstage.addEventListener('pointerup',()=>{if(pdrag?.type==='stagepan')pdrag=null});pstage.addEventListener('pointercancel',()=>{if(pdrag?.type==='stagepan')pdrag=null});
+function endInspectorDrag(){if(pdrag?.type==='sprite'){say('已调整部件场景位置；原始裁切坐标保持不变。');refreshList();select(selected)}pdrag=null}
+pc.addEventListener('pointerup',endInspectorDrag);pc.addEventListener('pointercancel',endInspectorDrag);
+pc.addEventListener('wheel',e=>{e.preventDefault();inspectZoom=clamp(inspectZoom*(e.deltaY<0?1.12:.89),.08,4);drawParallax()},{passive:false});
+$('parallaxStage').addEventListener('wheel',e=>{if(e.target===pc)return;e.preventDefault();inspectZoom=clamp(inspectZoom*(e.deltaY<0?1.12:.89),.08,4);drawParallax()},{passive:false});
+syncSceneControls();
 })();
 </script>
 </body></html>
