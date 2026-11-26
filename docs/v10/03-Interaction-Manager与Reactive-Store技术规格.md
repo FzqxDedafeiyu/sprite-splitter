@@ -1,11 +1,13 @@
 # V10 Interaction Manager 与 Reactive Store 技术规格
 
-> 文档版本：V1.1
+> 文档版本：V1.2
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 目标：从根本上解决 V9 多布尔交互模式冲突、指针生命周期不完整、数据更新后面板不同步的问题。
 > 约束：真实交互会话与项目数据分离；业务数据修改必须通过 Command；Reactive Store 是项目数据与可观察应用状态的权威来源。
 
-## 0. V1.1 修订记录
+## 0. V1.2 修订记录
+
+本版补全 ViewportState、CommandResult 和实体 revision 契约，并消除 activeTool 在 UIState 与 InteractionSnapshot 中的双重权威。activeTool 由 UIState 唯一持有，InteractionSnapshot 只报告当前 Gesture。
 
 本版根据两份独立 Agent 审查报告修订，明确：
 1. Interaction Manager 是真实 pointer / gesture runtime state 的唯一所有者；Store 的 InteractionSnapshot 仅供 UI 观察，不参与真实状态控制。
@@ -57,7 +59,8 @@ type InteractionState =
 
 工具选择（Select、Rect、Polygon、Brush、Pan 等）是用户偏好；当前 Gesture（Dragging、Drawing、Resizing 等）是一次操作会话。
 
-- activeTool 存储在 UI / workspace state。
+- `activeToolByWorkspace[activeWorkspace]` 是 activeTool 的唯一权威值，存储在 UIState；切换工作区时读取目标工作区的工具偏好。
+- InteractionSnapshot 不复制 activeTool；若 UI 需要显示当前工具，直接读取 UIState selector。
 - activeGesture 由 Interaction Manager 独占管理。
 - 工作区切换时取消当前 Gesture。
 - Gesture 先产生 draft，再提交 Command；不得直接修改 Project。
@@ -169,7 +172,27 @@ interface RootState {
 
 interface ProjectState {
   document: ProjectDocument;
-  revision: number;
+  revision: number; // 与 ProjectDocument.revision 同步的持久化业务版本
+}
+
+interface CommandResult {
+  ok: boolean;
+  commandId: string;
+  affectedIds: string[];
+  projectRevision: number;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  };
+}
+
+interface ViewportState {
+  panX: number;
+  panY: number;
+  zoom: number;
+  devicePixelRatio: number;
+  // 所有坐标换算统一经 Coordinate Service；该对象只保存视口参数
 }
 
 interface UIState {
@@ -185,10 +208,10 @@ interface UIState {
 }
 
 interface InteractionSnapshot {
-  activeTool?: string;
   gestureType: string; // 例如 "idle" / "drag-sprite" / "move-pivot"
   isInteracting: boolean;
-  // 不包含 pointerId、stroke buffer、draft 对象或真实状态机引用
+  // activeTool 的唯一权威值位于 UIState.activeToolByWorkspace
+  // 不包含 activeTool 副本、pointerId、stroke buffer、draft 对象或真实状态机引用
 }
 
 interface AnimationUIState {
@@ -220,6 +243,7 @@ interface DerivedState {
 - PlaybackState 由 Animation Playback Controller 更新，不得伪装成 InteractionState。
 - 派生数据通过 selector 或缓存服务计算。
 - Store 更新必须产生明确 revision / change notification。
+- ProjectDocument.revision 在每个成功提交的持久化业务事务后递增；实体 revision 按各自领域规格递增。UI 状态变化不递增 ProjectDocument.revision。
 - 深层对象不得通过共享引用在组件间被修改。
 
 ### 6.3 Selector
@@ -375,7 +399,7 @@ interface CompositeCommand extends Command {
 - Alpha / hit-test / thumbnail 等昂贵结果缓存，并按 SpriteAsset.contentVersion 失效。
 - contentVersion 在像素来源、Alpha / mask 或裁切几何等影响缓存结果的修改后递增；纯 UI 变化不递增。
 - 指针事件不触发不必要的持久化写入。
-- 异步任务携带 Project revision / 目标实体 revision，过期结果不得覆盖新数据。
+- 异步任务携带 Project revision、Clip revision 与目标 Frame revision 快照；按目标实体粒度判断过期，规则见《02-Animation-System-技术规格》。过期结果不得覆盖新数据。
 - 工作区卸载时取消异步任务与交互会话。
 - 所有异常路径都保证 Gesture 清理。
 
@@ -411,6 +435,7 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 自动识别不会遗留旧工具状态。
 - pointercancel 后可立即开始下一次操作。
 - Store InteractionSnapshot 不能反向改变 Interaction Manager 真实状态。
+- activeTool 只存在于 UIState.activeToolByWorkspace；InteractionSnapshot 不得包含 activeTool，避免双重权威。
 - PlaybackState 不占用 InteractionState 主 Gesture 状态。
 
 ### 12.2 指针测试
@@ -428,7 +453,8 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 无关 UI 状态变化不触发全量重绘。
 - selector 输出与 Project 数据一致。
 - 组件无法直接修改 Project。
-- 旧 revision 异步结果不能覆盖新状态。
+- 旧 revision 异步结果不能覆盖新状态；无关实体 revision 变化不得无条件使所有任务过期。
+- ViewportState、CommandResult 的字段符合本规格定义，所有业务实体 revision 递增规则符合总体架构与 Animation System 规格。
 - InteractionSnapshot 只反映状态，不包含真实 pointer session 或可变 draft。
 
 ### 12.4 History 测试
