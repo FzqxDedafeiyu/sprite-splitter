@@ -18,7 +18,8 @@
 | 图片导入 | 存在；左栏「① 导入素材」文件选择器 `#file`，支持 PNG/WebP/JPG | `#file.onchange`，约 L580 | 浏览器 File、Image、Canvas、Object URL | 每次载入清空 sprites；没有工程自动保存；需确认 URL 生命周期与大图内存 |
 | Alpha 自动识别 | 存在；「② 自动识别」模式 Alpha / 自动判断，Alpha 阈值 | `autoDetect()` L310-L355 | Canvas ImageData、连通域 flood fill | 自动判断以是否存在 alpha<255 为准；阈值影响半透明边缘；小区域可能被面积阈值过滤 |
 | 自动切分 | 存在；「自动识别区域」按钮 `#detect` | `autoDetect()` L310-L355 | Alpha 或边缘浅色背景掩码、4/8 邻域、面积阈值、外扩边距 | 基于像素连通，不理解语义；接触物体可能合并；自动结果需人工复核 |
-| 不透明浅色背景抠除 | 存在；自动/浅色背景模式、亮度阈值 | `autoDetect()` L310-L355 | Canvas 像素读取、从边缘 flood-fill | 仅边缘连通且高亮、低饱和像素被当作背景；不是通用抠图；内含白色区域通常受保护但仍需测 |
+| 不透明浅色背景抠除 | 存在；自动/浅色背景模式、亮度阈值 |
+| 独立整图背景抠除按钮 | 未发现独立入口；当前只有自动识别时的边缘浅色背景排除，以及针对当前选区的 GrabCut 精修 | `autoDetect()` L310-L355、`runGrabCut()` L367-L420 | Canvas 像素分析 / OpenCV.js | 不应把两种局部能力宣传为任意背景的一键去除 | `autoDetect()` L310-L355 | Canvas 像素读取、从边缘 flood-fill | 仅边缘连通且高亮、低饱和像素被当作背景；不是通用抠图；内含白色区域通常受保护但仍需测 |
 | 手动矩形选区 | 存在；`#add`「手动追加矩形选区」 | 主 Canvas pointerdown/move/up，约 L606-L655 | Canvas 坐标换算、drag 状态 | 需核实 addMode 状态切换和点击/拖动边界；自动切分后允许继续追加 |
 | 多边形选区 | 存在；`#lasso`「多边形抠选」 | lassoMode / lassoPoints、Canvas 事件约 L606-L655；`cropCanvas()` L357 起 | 指针事件、点集、Canvas destination-in | 双击闭合；多边形外像素透明；复杂自交/极小多边形未验收 |
 | 选区移动 | 存在；Canvas 选中框拖动 | 主 Canvas pointer 事件约 L606-L655 | selected、drag、screenToImage | 源图裁切坐标会随移动改变；需验证拖动边界与指针取消 |
