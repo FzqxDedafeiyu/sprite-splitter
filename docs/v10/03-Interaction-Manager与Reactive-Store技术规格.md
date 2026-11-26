@@ -446,9 +446,13 @@ interface CompositeCommand extends Command {
 
 统一使用以下坐标空间名称：
 - viewport：屏幕视口坐标，含视口缩放和平移。
+- sourceLocal：原始 SourceImage 像素坐标，必须关联 sourceImageId。
 - sceneWorld：场景世界坐标。
-- spriteLocal：Sprite 裁切图局部像素坐标。
+- spriteLocal：当前 SpriteAsset PNG 局部像素坐标；Sprite PNG、Mask 与 AnimationFrame.pivotLocal 共用此空间。
 - clipCanvas：动画 Clip 规范画布坐标。
+- atlasImage：Atlas 导出图像像素坐标，仅 Atlas frameRect 使用。
+- sourceTrimOrigin：sourceLocal 中的来源裁切原点；只用于 sourceLocal → spriteLocal。
+- atlasTrimOffset：spriteLocal 中的 Atlas 裁切原点；只用于 SpriteAsset → Atlas 裁切图坐标转换，不参与编辑器场景或动画权威坐标。
 
 建立统一坐标工具：
 - clientToViewport()
