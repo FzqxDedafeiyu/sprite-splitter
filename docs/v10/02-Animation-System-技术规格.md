@@ -618,6 +618,10 @@ D₂ = T - P₂ + O₂
 - Source Trim 的 sourceTrimOrigin 与 Atlas Trim 的 atlasTrimOffset 使用不同坐标空间；改变其中一个不得改变另一个。
 - Atlas 导出以 sourceSize / spriteSourceSize / atlasTrimOffset 重建完整 SpriteAsset PNG，结果与未 Trim 预览逐像素一致。
 - pivotLocal 保持 spriteLocal；pivotAtlasLocal = pivotLocal - atlasTrimOffset，导出适配值不得回写权威 Frame。
+- AtlasImageResource 的 byteLength 与 SHA-256 contentHash 必须和实际 PNG 字节一致；重新打包生成新 hash，不覆盖仍被引用的旧产物。
+- Source Trim 的 sourceTrimOrigin 与 Atlas Trim 的 atlasTrimOffset 使用不同坐标空间；改变其中一个不得改变另一个。
+- Atlas 导出以 sourceSize / spriteSourceSize / atlasTrimOffset 重建完整 SpriteAsset PNG，结果与未 Trim 预览逐像素一致。
+- pivotLocal 保持 spriteLocal；pivotAtlasLocal = pivotLocal - atlasTrimOffset，导出适配值不得回写权威 Frame。
 - Trim 后 Pivot 超出当前 Sprite 范围时产生明确 QA 错误，不得静默 clamp。
 - 自动校准默认跳过 manual / imported；显式包含受保护帧需二次确认并在结果摘要中列出覆盖对象。
 - 目标 Frame revision 变化时拒绝旧校准结果；无关 Frame 变化不使目标帧结果无条件过期。
