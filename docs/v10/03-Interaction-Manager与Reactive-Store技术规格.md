@@ -286,7 +286,7 @@ selector 应尽量返回稳定引用或使用 memoization，避免无关状态�
 ### 7.1 修改入口
 
 项目数据修改必须走 Command：
-- CreateSprite / UpdateSpriteGeometry / UpdateSpriteMask / DeleteSprite
+- CreateSprite / UpdateSpriteGeometry / UpdateSpriteMask / UpdateSpriteRasterAndMask / DeleteSprite
 - UpdateSceneLayout / ReorderSceneLayers
 - CreateAnimationSet / UpdateClip / ReorderFrames
 - SetFramePivot / SetFrameOffset
