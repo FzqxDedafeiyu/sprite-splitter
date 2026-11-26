@@ -1,6 +1,6 @@
 # V10 Interaction Manager 与 Reactive Store 技术规格
 
-> 文档版本：V1.2
+> 文档版本：V1.3
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 目标：从根本上解决 V9 多布尔交互模式冲突、指针生命周期不完整、数据更新后面板不同步的问题。
 > 约束：真实交互会话与项目数据分离；业务数据修改必须通过 Command；Reactive Store 是项目数据与可观察应用状态的权威来源。
@@ -147,7 +147,7 @@ Active Gesture
 3. commitGesture：将最终差异转换为一个 Command。
 4. cancelGesture：丢弃 draft，恢复原始画面。
 
-对于极高频笔刷，可使用专用 stroke buffer，完成后一次性提交 mask command；若笔刷需要实时持久化，则必须有节流策略和事务边界。
+对于极高频笔刷，可使用专用 stroke buffer，完成后一次性提交 UpdateSpriteMask Command；Mask 数据必须写入 SpriteAsset.mask 对应的持久化资源，并递增 SpriteAsset.contentVersion 与 revision。若笔刷需要实时持久化，则必须有节流策略和事务边界。
 
 一次用户可识别的连续操作只形成一个历史项：
 - 连续拖动：pointerup 时一次提交。
@@ -267,7 +267,7 @@ selector 应尽量返回稳定引用或使用 memoization，避免无关状态�
 ### 7.1 修改入口
 
 项目数据修改必须走 Command：
-- CreateSprite / UpdateSpriteGeometry / DeleteSprite
+- CreateSprite / UpdateSpriteGeometry / UpdateSpriteMask / DeleteSprite
 - UpdateSceneLayout / ReorderSceneLayers
 - CreateAnimationSet / UpdateClip / ReorderFrames
 - SetFramePivot / SetFrameOffset
@@ -334,6 +334,7 @@ interface CompositeCommand extends Command {
 - redo 栈在新命令提交后清空。
 - 历史项记录 label、时间、affectedIds、数据 revision。
 - 历史容量可配置；大图 mask 应评估快照内存，必要时使用差异记录或压缩快照。
+- UpdateSpriteMask 的 undo / redo 必须恢复 Mask 资源引用及像素内容；Mask 资源不得只存在于 Canvas 或内存缓存。
 - undo / redo 必须同时恢复业务数据与来源标记、锁定标记等关联字段。
 
 ### 7.5 事务 API
@@ -398,6 +399,7 @@ interface CompositeCommand extends Command {
 - 拖动预览使用局部 draft。
 - Alpha / hit-test / thumbnail 等昂贵结果缓存，并按 SpriteAsset.contentVersion 失效。
 - contentVersion 在像素来源、Alpha / mask 或裁切几何等影响缓存结果的修改后递增；纯 UI 变化不递增。
+- 原始 PNG Alpha、用户可编辑 Mask、最终导出 Alpha 是三个不同概念；Mask 通过 SpriteAsset.mask 持久化，导出 Alpha 由原始 Alpha 与 Mask 计算，不得覆盖原始像素。
 - 指针事件不触发不必要的持久化写入。
 - 异步任务携带 Project revision、Clip revision 与目标 Frame revision 快照；按目标实体粒度判断过期，规则见《02-Animation-System-技术规格》。过期结果不得覆盖新数据。
 - 工作区卸载时取消异步任务与交互会话。
@@ -453,6 +455,8 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 无关 UI 状态变化不触发全量重绘。
 - selector 输出与 Project 数据一致。
 - 组件无法直接修改 Project。
+- Mask 修改后保存、关闭、重新打开，Mask 像素与 contentVersion 保持一致。
+- Mask Command 的 undo / redo 精确恢复前后像素；失败事务不留下部分 Mask 资源。
 - 旧 revision 异步结果不能覆盖新状态；无关实体 revision 变化不得无条件使所有任务过期。
 - ViewportState、CommandResult 的字段符合本规格定义，所有业务实体 revision 递增规则符合总体架构与 Animation System 规格。
 - InteractionSnapshot 只反映状态，不包含真实 pointer session 或可变 draft。
