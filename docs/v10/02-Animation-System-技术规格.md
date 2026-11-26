@@ -484,14 +484,27 @@ interface AtlasImageResource {
   mimeType: "image/png";
 }
 
+interface AtlasRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface AtlasFrameExport {
   atlasImage: AtlasImageResource;
-  frameRect: Rect;         // atlasImage 像素坐标
+  frameRect: AtlasRect;    // atlasImage 像素坐标
   sourceSize: { width: number; height: number }; // 完整 SpriteAsset spriteLocal 画布尺寸
-  spriteSourceSize: Rect; // atlasTrimOffset 所在的 spriteLocal 裁切矩形
-  atlasTrimOffset: Point; // spriteLocal
-  pivotLocal: Point;      // 权威 spriteLocal
-  pivotAtlasLocal?: Point;// 裁切图局部坐标，仅适配器需要时输出
+  spriteSourceSize: AtlasRect; // atlasTrimOffset 所在的 spriteLocal 裁切矩形
+  atlasTrimOffset: Point;  // spriteLocal
+  pivotLocal: Point;       // 权威 spriteLocal
+  pivotAtlasLocal?: Point; // 裁切图局部坐标，仅适配器需要时输出
+  pivotTarget: Point;      // clipCanvas
+  frameOffset: Point;      // clipCanvas
+  duration: number;
+  clipId: string;
+  frameId: string;
+  spriteId: string;
 }
 ```
 
