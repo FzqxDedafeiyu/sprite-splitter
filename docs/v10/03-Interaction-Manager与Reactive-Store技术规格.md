@@ -5,9 +5,9 @@
 > 目标：从根本上解决 V9 多布尔交互模式冲突、指针生命周期不完整、数据更新后面板不同步的问题。
 > 约束：真实交互会话与项目数据分离；业务数据修改必须通过 Command；Reactive Store 是项目数据与可观察应用状态的权威来源。
 
-## 0. V1.2 修订记录
+## 0. V1.3 修订记录
 
-本版补全 ViewportState、CommandResult 和实体 revision 契约，并消除 activeTool 在 UIState 与 InteractionSnapshot 中的双重权威。activeTool 由 UIState 唯一持有，InteractionSnapshot 只报告当前 Gesture。
+本版在 V1.2 基础上补充 Mask 持久化命令、撤销语义、内容版本更新和保存重开验收；Interaction Manager / Store 的状态归属与事务边界保持不变。
 
 本版根据两份独立 Agent 审查报告修订，明确：
 1. Interaction Manager 是真实 pointer / gesture runtime state 的唯一所有者；Store 的 InteractionSnapshot 仅供 UI 观察，不参与真实状态控制。
