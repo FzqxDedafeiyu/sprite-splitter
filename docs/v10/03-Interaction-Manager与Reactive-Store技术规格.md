@@ -395,6 +395,15 @@ interface CompositeCommand extends Command {
 - undo / redo 成功时创建新的 revision；Create 的 undo 形成 RevisionLedger tombstone，redo 使用原逻辑 ID 并从 tombstone 水位继续递增。资源恢复旧字节时 contentHash 可回到历史值，但 resource revision 仍递增。
 - 若实体、资源或 Project CAS 已被外部事务修改，undo / redo 必须拒绝并报告冲突；不得自动 rebase，不得用旧 inverse patch 覆盖外部新数据。History 项保留供用户查看 / 解决，直至用户明确丢弃或达到保留上限。
 
+### 7.5 事务 API
+事务支持：
+- beginTransaction(label)
+- dispatch(command)
+- commitTransaction()
+- rollbackTransaction()
+
+批量操作必须原子化：要么全部成功，要么恢复到执行前状态。事务提交前不对其他订阅者暴露半成品 Project 状态；若实现采用暂存状态，只有 commit 后才发布一次正式 revision。持久化提交必须使用 expectedProjectRevision compare-and-swap；冲突时回滚暂存数据并返回结构化 conflict。
+
 ### 7.6 Conflict Classification 与 Rebase 流程
 
 所有并发冲突必须返回 CommandResult.error.conflict.kind，取值只允许 target-entity / resource / project-cas；若一次事务检测到多个冲突，conflicts 数组必须完整列出，conflict 指向主冲突。retryable 仅在满足 7.6 安全 Rebase 条件的 project-cas 冲突时为 true。冲突不等于普通校验错误，不得自动降级为 last-write-wins。
@@ -417,14 +426,6 @@ interface CompositeCommand extends Command {
 **undo / redo 规则：** 任何类型冲突均不自动 Rebase。保留 History 项与其资源引用，显示冲突对象和当前值；用户可刷新后放弃该历史操作，或在明确确认后将期望结果作为一个全新的补偿 Command 应用。不得提供绕过 revision 检查的强制覆盖按钮。
 
 **资源暂存与垃圾回收：** 新资源按事务 ID 写入 staging，校验字节数 / contentHash 后再提交 Project CAS；CAS 成功后才允许 Manifest 引用新 ResourceVersion。失败事务立即释放 staging lease。崩溃遗留 staging 与无引用资源的 24 小时 GC 宽限期、History 资源 pin 及默认 30 天 / 100 项 / 1 GiB 保留策略，以《01-总体架构与模块迁移方案》Revision Matrix 为唯一数值来源。
-### 7.5 事务 API
-事务支持：
-- beginTransaction(label)
-- dispatch(command)
-- commitTransaction()
-- rollbackTransaction()
-
-批量操作必须原子化：要么全部成功，要么恢复到执行前状态。事务提交前不对其他订阅者暴露半成品 Project 状态；若实现采用暂存状态，只有 commit 后才发布一次正式 revision。持久化提交必须使用 expectedProjectRevision compare-and-swap；冲突时回滚暂存数据并返回结构化 conflict。
 
 ## 8. Store 与渲染同步
 
