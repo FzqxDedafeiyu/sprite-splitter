@@ -188,6 +188,21 @@ interface ProjectState {
   revision: number; // 与 ProjectDocument.revision 同步的持久化业务版本
 }
 
+interface ConflictDetail {
+  kind: "target-entity" | "resource" | "project-cas";
+  entityId?: string;
+  expectedEntityRevision?: number;
+  actualEntityRevision?: number;
+  resourceId?: string;
+  expectedResourceRevision?: number;
+  actualResourceRevision?: number;
+  expectedContentHash?: string;
+  actualContentHash?: string;
+  expectedProjectRevision?: number;
+  actualProjectRevision?: number;
+  affectedIds?: string[];
+}
+
 interface CommandResult {
   ok: boolean;
   commandId: string;
@@ -196,21 +211,9 @@ interface CommandResult {
   error?: {
     code: string;
     message: string;
-    retryable: boolean;
-    conflict?: {
-      kind: "target-entity" | "resource" | "project-cas";
-      entityId?: string;
-      expectedEntityRevision?: number;
-      actualEntityRevision?: number;
-      resourceId?: string;
-      expectedResourceRevision?: number;
-      actualResourceRevision?: number;
-      expectedContentHash?: string;
-      actualContentHash?: string;
-      expectedProjectRevision?: number;
-      actualProjectRevision?: number;
-      affectedIds?: string[];
-    };
+    retryable: boolean;              // 仅符合 7.6 安全 Rebase 条件的 project-cas 可为 true
+    conflict?: ConflictDetail;       // 主冲突
+    conflicts?: ConflictDetail[];    // 同一事务检测到多个冲突时完整列出
   };
 }
 
@@ -394,7 +397,7 @@ interface CompositeCommand extends Command {
 
 ### 7.6 Conflict Classification 与 Rebase 流程
 
-所有并发冲突必须返回 CommandResult.error.conflict.kind，取值只允许 target-entity / resource / project-cas。一次事务可以检测到多个冲突；返回主冲突类型的同时，affectedIds 与具体 expected / actual 字段必须足以定位其余冲突。冲突不等于普通校验错误，不得自动降级为 last-write-wins。
+所有并发冲突必须返回 CommandResult.error.conflict.kind，取值只允许 target-entity / resource / project-cas；若一次事务检测到多个冲突，conflicts 数组必须完整列出，conflict 指向主冲突。retryable 仅在满足 7.6 安全 Rebase 条件的 project-cas 冲突时为 true。冲突不等于普通校验错误，不得自动降级为 last-write-wins。
 
 | 冲突类型 | 判定条件 | 默认处理 | 是否可自动重试 |
 |---|---|---|---|
