@@ -1,11 +1,13 @@
 # V10 Animation System 技术规格
 
-> 文档版本：V1.1
+> 文档版本：V1.2
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 范围：动作组、动画帧、枢轴预设、自动校准、预览、质量检查和导出。
 > 关键决策：角色与物体共用动画系统；组级与单帧级双向校准；自动校准支持预览和自动应用；导出支持 PNG 序列 + JSON 与 Sprite Sheet。
 
-## 0. V1.1 修订记录
+## 0. V1.2 修订记录
+
+本版在 V1.1 动画机制基础上补充实体 revision、异步校准过期判定、跨协议 legacy ID 关联、Trim 元数据必需字段、FPS 调整事务边界与渲染像素取整位置。核心坐标公式和 Pivot / Offset 语义保持不变。
 
 本版根据两份独立 Agent 审查报告修订，统一动画坐标公式、偏移坐标语义、Trim 还原规则、校准来源状态、批量撤销、PlaybackState、Manifest 版本字段与 camelCase 外键命名。
 
@@ -103,6 +105,9 @@ Sprite 像素坐标 (u,v) 对应 clipCanvas 位置：
 - 由 Atlas 重建原始帧时，必须把裁切矩形放回 sourceSize 指定的画布位置，再按 Dᵢ 合成。
 - 不得把 Atlas rect.x / rect.y 当成动画帧的 clipCanvas 位置。
 - Trim 与非 Trim 导出的抽样渲染结果必须一致。
+- 所有权威 Pivot / Offset 在计算与存储阶段保留浮点精度；不得在拖拽、自动校准或 Manifest 生成前提前取整。
+- 像素风预览的取整仅发生在最终 Canvas 绘制阶段，使用项目 renderSnap 策略（round / floor / none）；预览取整不得回写项目数据。
+- 导出器必须声明输出像素对齐策略；如导出 PNG 已按整数像素栅格化，应保证同一策略下预览与导出一致。
 
 ## 3. 领域模型
 
@@ -142,6 +147,7 @@ interface AnimationSet {
 
 interface AnimationClip {
   id: string;
+  revision: number; // Clip 任一持久化字段变化时递增
   setId: string; // 所属 Set 的权威外键
   name: string;
   actionType: string;
@@ -156,6 +162,7 @@ interface AnimationClip {
 
 interface AnimationFrame {
   id: string;
+  revision: number; // 本 Frame 任一持久化字段变化时递增
   spriteId: string;
   duration: number; // 帧时长倍率；播放秒数 = duration / fps
   alignment: {
@@ -293,7 +300,7 @@ interface PivotPreset {
 - 校准模式 preview / apply。
 - 覆盖策略。
 - 用户锁定帧集合。
-- 当前 Project / Clip revision。
+- 当前 Project revision、目标 Clip revision，以及本次将读取 / 修改的 Frame revision 快照。
 
 ### 6.2 输出
 CalibrationResult：
@@ -304,7 +311,7 @@ CalibrationResult：
 - 每帧异常说明。
 - 将被更新 / 跳过 / 保护的帧列表。
 - algorithmVersion、计算时间与参数摘要。
-- 计算时的目标 revision，用于过期结果校验。
+- 计算时的目标 revision 快照：projectRevision、clipRevision、frameRevisions（frameId → revision），用于精确过期结果校验。
 
 ### 6.3 预览模式
 - 纯计算，不修改正式项目状态。
@@ -318,7 +325,10 @@ CalibrationResult：
 - 一次提交，一次撤销。
 - 记录 algorithmVersion、时间、参数、修改帧和跳过帧。
 - 应用失败时整批回滚。
-- 执行前校验 Clip 仍存在且 revision 未变化；过期结果必须重新计算或由用户确认。
+- 执行前校验 Clip 仍存在且 clipRevision 未变化，并逐一校验本次将修改的 Frame revision 与计算快照一致。
+- 无关 Frame 的修改不应使整组结果自动过期；被修改目标 Frame 的 revision 变化则对应结果过期。
+- Project revision 用于诊断和整体快照追踪，不单独作为唯一失效条件，避免无关项目编辑导致结果全部作废。
+- 用户确认应用过期结果时，必须重新展示差异，并通过 Command 校验目标实体仍存在；不得静默覆盖新值。
 
 ### 6.5 置信度
 建议分级：
@@ -334,7 +344,8 @@ CalibrationResult：
 - 播放 / 暂停。
 - 首帧 / 末帧 / 上一帧 / 下一帧。
 - 当前帧编号。
-- FPS 调整。
+- FPS 调整；FPS 属于项目数据，拖动滑块或连续键盘调整期间只更新 UI draft，pointerup / change commit / Enter / blur 时提交一个 UpdateClipFPS Command；取消编辑则丢弃 draft。
+- 一次连续调整只产生一个 History 项，不得每个滑块刻度或 key-repeat 都生成独立撤销记录。
 - Loop 开关。
 - 单帧停留。
 - 固定参考点播放。
@@ -356,6 +367,7 @@ type PlaybackState = "stopped" | "playing" | "paused";
 - pointercancel、lostpointercapture、window blur 必须先结束或取消 Gesture，再按恢复策略处理播放状态。
 - 切换 Clip、切换工作区、页面失焦时必须明确处理播放时钟。
 - 播放状态、当前帧、鼠标 hover 等临时状态不写入项目文件；FPS、loop 和帧时长属于项目数据。
+- FPS 连续调整在编辑手势期间使用临时 draft，提交时通过单个可撤销 Command 写入 Clip，并递增 Clip.revision 与 ProjectDocument.revision。
 
 ### 7.3 统一渲染
 预览、洋葱皮、质量检查截图和导出必须调用同一套 frame layout / render transform 函数，禁止各自重复实现坐标计算。
@@ -435,7 +447,12 @@ Manifest 示例：
 - Sprite 外键统一为 spriteId；禁止 sprite_id、texture_uuid 等混合命名。
 - 帧序号从 0 开始；文件名 frame_000.png。
 - 坐标单位为像素；pivotLocal 属于 spriteLocal，pivotTarget / offset 属于 clipCanvas。
-- Manifest 必须包含 format、资源 ID、Clip ID、帧 ID、imagePath、画布尺寸、pivotTarget、frame pivotLocal、offset、duration、fps、loop。
+- 对从 V9 迁移的 Sprite，Frame 可选携带 `legacySpriteId`（如 sprite_001），只用于关联冻结的 V9 场景 Manifest；权威外键仍为 UUID `spriteId`。
+- Trim 元数据必须保留 `sourceSize`（原始画布宽高）、`spriteSourceSize`（原始画布内裁切矩形 x/y/width/height）与 `trimOffset`（等于 spriteSourceSize 左上角的 spriteLocal 偏移）；pivotLocal 始终以未 Trim Sprite 局部坐标表达。
+- Trim 导出附带 Pivot 时，若引擎要求裁切图局部 Pivot，按 `pivotTrimmed = pivotLocal - trimOffset` 转换；不得覆盖或改写权威原始 pivotLocal。
+- Manifest 必须包含 format、projectId、Clip ID、Frame ID、UUID spriteId、imagePath、画布尺寸、pivotTarget、frame pivotLocal、offset、duration、fps、loop。
+- 对迁移素材可选导出 legacySpriteId，作为 V9 场景 Manifest 的关联键；不得用 legacySpriteId 替代 spriteId。
+- Trim 模式下每帧必须包含 sourceSize、spriteSourceSize、trimOffset；非 Trim 模式可省略 Trim 字段或显式标记 trimmed=false，具体结构在 Schema 校验器中固定，不允许同一字段多种含义。
 - V10 动画 ZIP 使用独立文件命名和 anim/manifest.json 路径；V9 场景 ZIP 继续使用 sprites/NNN_名称.png + manifest.json，不互相覆盖。
 
 ### 9.2 Sprite Sheet
@@ -469,7 +486,9 @@ Trim 后必须保留原始偏移，保证重建结果与未 Trim 的预览一致
 - 所有 PNG 可生成。
 - 帧坐标合法。
 - Atlas 尺寸符合配置。
-- Manifest schema 合法。
+- Manifest schema 合法，Frame 的 spriteId 必须引用存在的 Sprite UUID。
+- legacySpriteId 仅作为兼容关联信息；若存在，必须能在 migrationMetadata.idMap 中找到对应 UUID。
+- Trim 模式下 sourceSize / spriteSourceSize / trimOffset 三项齐全且互相一致。
 - Trim 元数据完整。
 - 预览与导出抽样渲染一致。
 
@@ -540,6 +559,7 @@ Trim 后必须保留原始偏移，保证重建结果与未 Trim 的预览一致
 - 强制覆盖手工 / 导入帧需要显式勾选并二次确认。
 - 播放中拖动 Pivot 自动暂停，结束后按策略恢复；取消操作不会留下 Gesture 或播放死锁。
 - 播放、逐帧、Loop、FPS 与帧时长一致。
+- FPS 连续滑动一次提交一个 History 项，撤销后恢复原 FPS；无关帧修改不导致异步校准结果误判过期。
 - PNG 序列 Manifest 使用 format 与 camelCase spriteId。
 - Sprite Sheet Trim / 非 Trim 两种方式均可复现相同画面。
 - 导出抽样渲染与工作区预览一致。
