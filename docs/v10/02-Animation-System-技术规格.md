@@ -1,24 +1,20 @@
 # V10 Animation System 技术规格
 
-> 文档版本：V1.2
+> 文档版本：V1.3
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 范围：动作组、动画帧、枢轴预设、自动校准、预览、质量检查和导出。
 > 关键决策：角色与物体共用动画系统；组级与单帧级双向校准；自动校准支持预览和自动应用；导出支持 PNG 序列 + JSON 与 Sprite Sheet。
 
-## 0. V1.2 修订记录
+## 0. V1.3 修订记录
 
-本版在 V1.1 动画机制基础上补充实体 revision、异步校准过期判定、跨协议 legacy ID 关联、Trim 元数据必需字段、FPS 调整事务边界与渲染像素取整位置。核心坐标公式和 Pivot / Offset 语义保持不变。
+本版根据 V9→V10 迁移模拟与真实资产推演报告，补充动画数据迁移边界，并澄清 Scene Anchor 不能作为 Animation Pivot。
 
-本版根据两份独立 Agent 审查报告修订，统一动画坐标公式、偏移坐标语义、Trim 还原规则、校准来源状态、批量撤销、PlaybackState、Manifest 版本字段与 camelCase 外键命名。
-
-关键决策：
-- 每帧 Sprite 左上角位置统一为 **Dᵢ = T - Pᵢ + Oᵢ**。
-- Pᵢ 是 spriteLocal 坐标；Oᵢ 是 clipCanvas 坐标中的平移修正量。不得再按 Sprite 宽高追加中心修正。
-- 自动应用和 AI 批量应用必须通过单一 CompositeCommand / TransactionCommand。
-- PlaybackState 与 Pointer Gesture 分离；开始校准拖拽默认自动暂停。
-- AnimationClip.setId 是所属 AnimationSet 的权威关系；AnimationSet.clipIds 不持久化，由 selector 派生。
-- V10 动画导出 format 固定为 sprite-anim-manifest/v1，与项目 projectSchemaVersion、V9 场景 Manifest 分离。
-- 本规格不定义动画 Manifest 的重新导入器；验收仅要求结构、引用和坐标校验，不承诺重新导入功能。
+V1.3 关键决策：
+- V9 的 scene anchor 是场景标注，不是动画枢轴；不得从 `anchor - sourceRect.origin` 直接推导 animation pivotLocal。
+- V9 的 `spatial-scene-layout/v2` 不包含 AnimationSet / Clip / Frame 序列定义；仅凭场景 Manifest 不得自动生成动画组或动画帧。
+- 若用户或独立 Agent 明确提供了动作组、帧顺序和动作语义，可建立待确认的 AnimationSet / Clip；来源数据未提供可靠 pivot / offset 时，使用几何候选并将 offset 初始化为 (0,0)。
+- 按唯一公式 Dᵢ = T - Pᵢ + Oᵢ，组级 Pivot 对齐由 T - Pᵢ 自动完成；Offset 只表达额外的视觉修正，不能用 Pᵢ - T 代替。
+- V9 场景 Sprite 的 position / Scene Anchor 迁移规则以总体架构 §9.4 为准；动画坐标不引用 sceneWorld。
 
 ## 1. 目标与基本原则
 
@@ -64,7 +60,7 @@ Animation System 让切割后的 Sprite Asset 可以被组装成可预览、可�
 因此，帧的有效枢轴位置为 T + Oᵢ。拖动帧图像时，写入 Oᵢ；拖动 Pivot 标记时，修改 Pᵢ。两种操作必须使用不同工具状态。
 
 ### 2.6 Scene Anchor
-场景布局系统中的 sceneWorld 空间摆放参考点。它不参与 Animation Clip 的帧对齐计算，也不与 T / Pᵢ / Oᵢ 共用字段。
+场景布局系统中的 sceneWorld 空间参考标记。V9 Anchor 不参与 Sprite 绘制定位，也不代表角色脚底、骨盆、物体铰链等动画语义点。它不参与 Animation Clip 的帧对齐计算，也不与 T / Pᵢ / Oᵢ 共用字段。
 
 ### 2.7 唯一渲染位置公式
 
@@ -86,6 +82,8 @@ Sprite 像素坐标 (u,v) 对应 clipCanvas 位置：
 ```text
 (drawX + u, drawY + v)
 ```
+
+**Offset 初始化规则：** 当一帧只有 pivotLocal 候选而没有来源可靠的额外位移修正时，offset 必须初始化为 (0,0)。组级对齐已经由 T - Pᵢ 完成，不能再把 (Pᵢ - T) 写入 offset，否则会抵消枢轴对齐并引入反向偏移。只有用户明确校准或来源格式明确提供同一 clipCanvas 坐标语义的帧级修正时，才导入非零 offset。
 
 该公式已经将 Sprite 局部枢轴换算为图像左上角位置。**不得再根据 Wᵢ / Hᵢ 自动追加半宽、半高或几何中心修正**，否则会重复计算并造成帧尺寸不同步时的二次偏移。
 
@@ -506,6 +504,26 @@ Trim 后必须保留原始偏移，保证重建结果与未 Trim 的预览一致
 - 删除动作组不应删除其引用的原始 Sprite。
 - 导入未知 Manifest 字段时保留扩展字段。
 
+### 10.1 V9 动画迁移边界
+
+V9 的 `spatial-scene-layout/v2` 是场景布局协议，不定义动画动作组、Clip、帧顺序、帧时长或动画枢轴。因此：
+1. 仅导入 V9 场景 Manifest 时，只创建 SpriteAsset 与 SceneLayout，不创建 AnimationSet / AnimationClip / AnimationFrame。
+2. 不得根据 Sprite 名称相似、文件相邻、数组顺序、groupName 或 sceneAnchor 自动推断动作组与帧序列。
+3. V9 `anchor` 是 source-image 全局场景参考标记，不能作为 pivotLocal；不得直接执行 `pivotLocal = anchor - sourceRect.origin`。
+4. 如用户明确指定某些 Sprite 构成动作组，系统可建立待校准 Clip；pivotLocal 由对应 PivotPreset 的几何算法生成候选，并标记 geometry_auto / default；offset 初始为 (0,0)。
+5. 只有外部来源明确提供动画帧关系、帧顺序、帧时长、pivotLocal 与 offset 的坐标语义时，才允许作为 imported 校准数据写入。缺失字段不补造 confidence。
+6. Agent 提供的动画分组建议必须先进入预览与确认流程；未经确认不得生成正式动画数据。
+
+### 10.2 Offset 迁移算例
+
+设组目标枢轴 T=(57,83)，第二帧 pivotLocal P₂=(51,81)，且来源没有额外帧偏移。则：
+```text
+D₂ = T - P₂ + O₂
+   = (57,83) - (51,81) + (0,0)
+   = (6,2)
+```
+此时第二帧的局部枢轴映射到 T，已经完成对齐。若再写入 O₂=(-6,-2)，则有效枢轴变为 (51,81)，偏离目标 T。因此，迁移报告中仅由两个 Pivot 坐标相减得到的 (-6,-2) 不能作为自动导入 Offset；除非它被明确证明是额外的 clipCanvas 视觉修正量。
+
 ## 11. 命令与历史记录
 
 至少实现以下命令：
@@ -550,6 +568,9 @@ Trim 后必须保留原始偏移，保证重建结果与未 Trim 的预览一致
 - 同一个 Sprite 可被多个 Clip 引用。
 - 组级校准后各帧 Pivot 对齐。
 - 不同 Sprite 宽高下，公式 Dᵢ = T - Pᵢ + Oᵢ 计算无额外中心补偿。
+- V9 sceneAnchor 不被误读为 animationPivot。
+- 仅有 V9 场景 Manifest 时不自动创建 AnimationSet / Clip / Frame。
+- 无来源偏移时所有新导入帧 offset=(0,0)；不得将 Pᵢ-T 或 T-Pᵢ 重复写入 Offset。
 - 单帧偏移只影响当前 Frame。
 - 单帧 Pivot 覆盖可撤销。
 - 以当前帧为标准重算组级结果，渲染位置连续。
