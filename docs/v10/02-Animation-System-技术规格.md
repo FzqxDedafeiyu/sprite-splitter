@@ -1,13 +1,20 @@
 # V10 Animation System 技术规格
 
-> 文档版本：V1.4
-> 文档状态：修订设计基线（Implementation Blueprint）
+> 文档版本：V1.5
+> 文档状态：冻结设计基线（Frozen Implementation Baseline）
 > 范围：动作组、动画帧、枢轴预设、自动校准、预览、质量检查和导出。
 > 关键决策：角色与物体共用动画系统；组级与单帧级双向校准；自动校准支持预览和自动应用；导出支持 PNG 序列 + JSON 与 Sprite Sheet。
 
-## 0. V1.4 修订记录
+## 0. V1.5 修订记录
 
-本版在 V1.3 基础上冻结 Source Local、Sprite Local 与 Clip Canvas 三种坐标空间，明确 Trim 坐标转换只执行一次，并补充手工 / 导入校准保护及并发结果校验。
+本版在 V1.4 基础上将 Source Trim 与 Atlas Trim 的字段、坐标空间和所属层级彻底分离；明确 pivotLocal 始终是 SpriteAsset 当前 PNG 的 spriteLocal，Atlas 裁切 Pivot 使用独立 pivotAtlasLocal；补充 AnimationSet / PivotPreset revision，并统一资源哈希与并发契约。
+
+V1.5 冻结决策：
+- sourceTrimOrigin / Rᵢ 属于 Sprite 来源裁切层，坐标为 sourceLocal；它由 sourceRect.origin 派生，用于 sourceLocal → spriteLocal 转换。
+- atlasTrimOffset 属于 Atlas Pack 导出层，坐标为 spriteLocal；它是 Atlas 裁切矩形在完整 Sprite PNG 中的左上角偏移，不参与 sourceLocal 转换。
+- 内部 AnimationFrame.pivotLocal 永远是当前 SpriteAsset PNG 的 spriteLocal。Atlas 裁切后若目标引擎需要裁切图局部枢轴，另行输出 pivotAtlasLocal = pivotLocal - atlasTrimOffset。
+- Atlas 图像是不可变导出资源，必须输出 SHA-256 contentHash 与 byteLength；重建产生新哈希，不原地覆盖既有导出资源。
+- AnimationSet / PivotPreset 具有独立 revision；具体递增与 expected 来源遵循总体架构 Revision Matrix 和 Interaction / Store 冲突契约。
 
 V1.4 关键决策：
 - Source Local 表示未裁切源画布坐标；Sprite Local 表示当前 Sprite PNG 的实际像素坐标。若 sourceLocal 裁切原点为 Rᵢ，则 Pᵢ = Qᵢ - Rᵢ；Pᵢ 一旦转换为 spriteLocal，渲染公式不得再次减去 Trim。
@@ -56,15 +63,17 @@ Animation System 让切割后的 Sprite Asset 可以被组装成可预览、可�
 ### 2.3 Clip Canvas（clipCanvas）
 一个 Animation Clip 的规范画布坐标系，原点位于画布左上角。所有帧最终都在这个坐标系中合成。Clip 具有 canvas.width / canvas.height；该字段表示 clipCanvas 尺寸。
 
-### 2.4 Trim Offset（Rᵢ）
-对于从原始 SourceImage 裁切得到的 Sprite，Rᵢ 表示当前 Sprite PNG 左上角在对应 sourceLocal 中的位置。若 Sprite 是从 sourceLocal 矩形 (x,y,width,height) 裁切而来，则 Rᵢ=(x,y)。Rᵢ 必须与 sourceRect / Trim 元数据一致；来源未知时不得伪造 Rᵢ。
+### 2.4 Source Trim Origin（sourceTrimOrigin / Rᵢ）
+Source Trim Origin 属于 Sprite 来源裁切层。它表示当前 SpriteAsset PNG 左上角在原始 SourceImage 的 sourceLocal 中的位置，坐标空间为 sourceLocal。若 Sprite 是从 sourceLocal 矩形 (x,y,width,height) 裁切而来，则 sourceTrimOriginᵢ = Rᵢ = (x,y)，由 SpriteAsset.sourceRect.origin 派生，不重复存储为另一份可变字段。来源未知时 Rᵢ 未知，禁止猜测。
+
+Rᵢ 只用于 sourceLocal → spriteLocal：Pᵢ = Qᵢ − sourceTrimOriginᵢ。它不描述 Atlas 图集内部裁切。
 
 ### 2.5 Source Pivot（Qᵢ）与 Frame Pivot Local（Pᵢ）
 Qᵢ 是明确以 sourceLocal 表达的枢轴点；Pᵢ 是同一枢轴点转换到当前 Sprite PNG 后的 spriteLocal 坐标。转换关系仅执行一次：
 
 ```text
-Pᵢ = Qᵢ - Rᵢ
-Qᵢ = Pᵢ + Rᵢ
+Pᵢ = Qᵢ - sourceTrimOriginᵢ
+Qᵢ = Pᵢ + sourceTrimOriginᵢ
 ```
 
 若输入本身已提供 spriteLocal 的 Pᵢ，则直接使用，不得再减 Rᵢ。若裁切后 Qᵢ 落在当前 Sprite PNG 范围之外，该点不能作为当前 Sprite 的有效 Pivot；必须报告超界并要求确认，不得 clamp 后伪装为原值。
@@ -90,17 +99,27 @@ drawY = ty - pᵢy + oy
 
 Sprite 像素坐标 (u,v) 对应 clipCanvas 位置 (drawX+u, drawY+v)。
 
-**Trim 只负责坐标转换，不在渲染公式中重复补偿。** 若来源 Pivot 是 sourceLocal，先计算 Pᵢ=Qᵢ-Rᵢ，再代入 Dᵢ=T-Pᵢ+Oᵢ；若 Pᵢ 已经是 spriteLocal，直接代入公式。Offset 只表达额外的用户 / 来源修正；无额外修正时 Oᵢ=(0,0)。
+**Trim 只负责坐标转换，不在渲染公式中重复补偿。** 若来源 Pivot 是 sourceLocal，先计算 Pᵢ=Qᵢ-sourceTrimOriginᵢ，再代入 Dᵢ=T-Pᵢ+Oᵢ；若 Pᵢ 已经是 spriteLocal，直接代入公式。Offset 只表达额外的用户 / 来源修正；无额外修正时 Oᵢ=(0,0)。
 
 该公式已经将 Sprite 局部枢轴换算为图像左上角位置。不得再根据 Wᵢ/Hᵢ 自动追加半宽、半高或几何中心修正。也不得在 Pᵢ 转换时减过 Rᵢ 后，又在 Dᵢ 计算或 Oᵢ 中重复减 / 加同一 Trim。
 
-### 2.10 Atlas Pack Trim
-Atlas Pack Trim 是导出图集时对 Sprite PNG 透明边缘的存储优化，与 SpriteAsset 从 SourceImage 裁切得到的 Trim 是不同层级：
-- AnimationFrame 仍引用未被 Atlas Pack 改写的 SpriteAsset。
-- Atlas Trim 只改变图集中的存储矩形，不改变 AnimationFrame 的 Pᵢ、T、Oᵢ 或规范渲染位置。
-- 必须保留 sourceSize、spriteSourceSize、trimOffset（或等价字段），并明确 trimOffset 是从未 Trim 的 Sprite 画布左上角到图集裁切矩形左上角的 spriteLocal 偏移。
-- 从 Atlas 重建帧时，先将裁切图像放回 sourceSize 指定的 Sprite 画布位置，再按 Dᵢ 合成。
-- 不得把 Atlas rect.x / rect.y 当成动画帧的 clipCanvas 位置。
+### 2.10 Atlas Pack Trim（独立于 Source Trim）
+Atlas Pack Trim 属于导出图集层，只为减少图集透明像素，不改变 SpriteAsset 本身的像素画布和动画语义。
+
+| 字段 | 坐标空间 | 所属层级 | 精确定义 |
+|---|---|---|---|
+| sourceSize | spriteLocal 画布尺寸 | Atlas 导出帧元数据 | 完整、未经过 Atlas Pack Trim 的 SpriteAsset PNG 宽高 |
+| spriteSourceSize | spriteLocal | Atlas 导出帧元数据 | Atlas 实际存储的裁切矩形在完整 SpriteAsset PNG 中的位置与尺寸 |
+| atlasTrimOffset | spriteLocal 向量 | Atlas Pack | spriteSourceSize 的左上角 (x,y)，即 Atlas 裁切矩形相对完整 SpriteAsset PNG 原点的偏移 |
+| frameRect | atlasImage 像素坐标 | Atlas Pack | 裁切像素在 Atlas 图像中的实际矩形；不是 Sprite 或 clipCanvas 坐标 |
+| pivotLocal | spriteLocal | AnimationFrame 权威数据 | 当前 SpriteAsset PNG 中的 Pivot，Atlas Pack 不得改写 |
+| pivotAtlasLocal | Atlas 裁切图局部坐标 | Atlas 导出适配字段 | 仅当目标引擎需要裁切图局部 Pivot 时输出，等于 pivotLocal - atlasTrimOffset |
+
+规则：
+- sourceTrimOrigin / Rᵢ 描述 SourceImage → SpriteAsset 的来源裁切；atlasTrimOffset 描述 SpriteAsset → Atlas 子矩形的导出裁切。二者不得互换、相加或写入同一个 trimOffset 字段。
+- AnimationFrame.pivotLocal 始终以当前 SpriteAsset PNG 为基准，即 spriteLocal；不得称为“未 Trim 原始 SourceImage 坐标”。
+- Atlas 裁切后如需重建完整 SpriteAsset PNG，将裁切图像放回 sourceSize 指定画布的 atlasTrimOffset 位置，再按 Dᵢ 合成。
+- 不得把 Atlas frameRect.x / frameRect.y 当成 clipCanvas 位置或 sourceTrimOrigin。
 - 所有权威 Pivot / Offset 在计算与存储阶段保留浮点精度；像素风预览取整只发生在最终 Canvas 绘制阶段，使用项目 renderSnap 策略。预览取整不得回写项目数据。
 - 导出器必须声明输出像素对齐策略；同一策略下预览与导出应一致。
 
@@ -132,6 +151,7 @@ interface Point {
 
 interface AnimationSet {
   id: string;
+  revision: number; // Set 自身名称、类型、成员变化时递增
   name: string;
   assetType: AssetType;
   spriteIds: string[];
@@ -176,6 +196,7 @@ interface AnimationFrame {
 
 interface PivotPreset {
   id: string;
+  revision: number; // 预设定义变化时递增
   name: string;
   assetType: AssetType | "both";
   actionTypes: string[];
@@ -321,7 +342,7 @@ CalibrationResult：
 - 一次提交，一次撤销。
 - 记录 algorithmVersion、时间、参数、修改帧和跳过帧。
 - 应用失败时整批回滚。
-- 执行前校验 Project / Clip / 目标 Frame revision 快照，并逐一校验本次将修改的 Frame revision 与计算快照一致；持久化阶段还必须执行 Project revision compare-and-swap。
+- 执行前校验 Project / Clip / 目标 Frame revision 快照，并逐一校验本次将修改的 Frame revision 与计算快照一致；资源输入同时校验 resourceId、resource revision 与 contentHash；持久化阶段还必须执行 Project revision compare-and-swap。
 - 无关 Frame 的修改不应使整组结果自动过期；被修改目标 Frame 的 revision 变化则对应结果过期。若 Project revision 因其他事务变化，先由持久化层拒绝旧快照提交；应用层可重新读取并验证受影响实体后重新生成 / 确认命令，不得直接 last-write-wins。
 - Project revision 用于诊断和整体快照追踪，不单独作为唯一失效条件，避免无关项目编辑导致结果全部作废。
 - 用户确认应用过期结果时，必须重新展示差异，并通过 Command 校验目标实体仍存在；不得静默覆盖新值。
@@ -444,11 +465,11 @@ Manifest 示例：
 - 帧序号从 0 开始；文件名 frame_000.png。
 - 坐标单位为像素；pivotLocal 属于 spriteLocal，pivotTarget / offset 属于 clipCanvas。
 - 对从 V9 迁移的 Sprite，Frame 可选携带 `legacySpriteId`（如 sprite_001），只用于关联冻结的 V9 场景 Manifest；权威外键仍为 UUID `spriteId`。
-- Trim 元数据必须保留 `sourceSize`（原始画布宽高）、`spriteSourceSize`（原始画布内裁切矩形 x/y/width/height）与 `trimOffset`（等于 spriteSourceSize 左上角的 spriteLocal 偏移）；pivotLocal 始终以未 Trim Sprite 局部坐标表达。
-- Trim 导出附带 Pivot 时，若引擎要求裁切图局部 Pivot，按 `pivotTrimmed = pivotLocal - trimOffset` 转换；不得覆盖或改写权威原始 pivotLocal。
+- Atlas Trim 元数据必须保留 sourceSize（完整 SpriteAsset PNG 宽高）、spriteSourceSize（Atlas 裁切矩形在 spriteLocal 中的 x/y/width/height）与 atlasTrimOffset（等于 spriteSourceSize 左上角的 spriteLocal 偏移）。
+- pivotLocal 始终是当前 SpriteAsset PNG 的 spriteLocal。若引擎要求 Atlas 裁切图局部 Pivot，按 pivotAtlasLocal = pivotLocal - atlasTrimOffset 转换；不得覆盖或改写权威 pivotLocal。
 - Manifest 必须包含 format、projectId、Clip ID、Frame ID、UUID spriteId、imagePath、画布尺寸、pivotTarget、frame pivotLocal、offset、duration、fps、loop。
 - 对迁移素材可选导出 legacySpriteId，作为 V9 场景 Manifest 的关联键；不得用 legacySpriteId 替代 spriteId。
-- Trim 模式下每帧必须包含 sourceSize、spriteSourceSize、trimOffset；非 Trim 模式可省略 Trim 字段或显式标记 trimmed=false，具体结构在 Schema 校验器中固定，不允许同一字段多种含义。
+- Atlas Trim 模式下每帧必须包含 sourceSize、spriteSourceSize、atlasTrimOffset；非 Trim 模式可省略这些字段或显式标记 atlasTrimmed=false，具体结构在 Schema 校验器中固定。sourceTrimOrigin 不属于 Atlas 元数据；它只在来源坐标转换时使用。
 - V10 动画 ZIP 使用独立文件命名和 anim/manifest.json 路径；V9 场景 ZIP 继续使用 sprites/NNN_名称.png + manifest.json，不互相覆盖。
 
 ### 9.2 Sprite Sheet
@@ -462,11 +483,11 @@ Atlas Packer 支持：
 - 像素素材默认禁止旋转图块，可由用户显式开启。
 
 每个图集帧元数据至少包含：
-- atlasImagePath。
+- atlasImage：AtlasImageResource，包含 assetRef、contentHash（sha256）、byteLength、mimeType。该图像为不可变导出资源，每次重新打包生成新 contentHash / 输出路径，不使用可变 revision。
 - frameRect。
 - sourceSize。
 - spriteSourceSize。
-- trimOffset。
+- atlasTrimOffset（spriteLocal）。
 - pivotLocal / pivotTarget。
 - frameOffset。
 - duration。
@@ -484,7 +505,7 @@ Trim 后必须保留原始偏移，保证重建结果与未 Trim 的预览一致
 - Atlas 尺寸符合配置。
 - Manifest schema 合法，Frame 的 spriteId 必须引用存在的 Sprite UUID。
 - legacySpriteId 仅作为兼容关联信息；若存在，必须能在 migrationMetadata.idMap 中找到对应 UUID。
-- Trim 模式下 sourceSize / spriteSourceSize / trimOffset 三项齐全且互相一致。
+- Atlas Trim 模式下 sourceSize / spriteSourceSize / atlasTrimOffset 三项齐全且互相一致；atlasImage.contentHash 与导出图像字节 SHA-256 一致。
 - Trim 元数据完整。
 - 预览与导出抽样渲染一致。
 
@@ -553,7 +574,7 @@ D₂ = T - P₂ + O₂
 - 时间轴缩略图按需生成并缓存。
 - 播放过程中只更新必要的 Canvas 区域或帧，不重建整个时间轴 DOM。
 - 大批量校准可异步计算，但必须提供取消和结果过期校验。
-- 异步结果应用前确认目标 Clip 仍存在且 revision 未变化。
+- 异步结果应用前确认目标 Clip、目标 Frame 与所读取 Sprite / Mask 资源的 revision / contentHash 快照仍匹配；Project CAS 冲突与实体 / 资源冲突的处理遵循《03-Interaction-Manager与Reactive-Store技术规格》。
 
 ## 13. 验收测试
 
