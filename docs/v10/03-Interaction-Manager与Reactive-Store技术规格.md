@@ -1,15 +1,21 @@
 # V10 Interaction Manager 与 Reactive Store 技术规格
 
-> 文档版本：V1.3
+> 文档版本：V1.4
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 目标：从根本上解决 V9 多布尔交互模式冲突、指针生命周期不完整、数据更新后面板不同步的问题。
 > 约束：真实交互会话与项目数据分离；业务数据修改必须通过 Command；Reactive Store 是项目数据与可观察应用状态的权威来源。
 
-## 0. V1.3 修订记录
+## 0. V1.4 修订记录
 
-本版在 V1.2 基础上补充 Mask 持久化命令、撤销语义、内容版本更新和保存重开验收；Interaction Manager / Store 的状态归属与事务边界保持不变。
+本版在 V1.3 基础上补充 Project / Entity / Resource revision 的乐观并发校验，明确 CompositeCommand 持久化原子性，以及 undo / redo 防止覆盖外部新数据的规则；Interaction Manager 与 Store 的状态归属保持不变。
 
-本版根据两份独立 Agent 审查报告修订，明确：
+V1.4 进一步明确：
+1. Command 执行前校验 expectedProjectRevision、所有受影响实体的 expectedEntityRevisions，以及需要读取 / 替换的 expectedResourceRevisions。
+2. 持久化采用 Project revision compare-and-swap；冲突拒绝提交并要求刷新 / 重新应用，不得 last-write-wins。
+3. undo / redo 也执行 revision 校验；若目标实体已被外部更新，不得用旧 inverse patch 覆盖新数据。
+4. Mask 与 Sprite 像素资源、资源引用、contentVersion 和 revision 必须在同一事务中提交。
+
+V1.3 原有决策保持：
 1. Interaction Manager 是真实 pointer / gesture runtime state 的唯一所有者；Store 的 InteractionSnapshot 仅供 UI 观察，不参与真实状态控制。
 2. Command.undo 为必填；不可撤销的内部操作不进入项目 History。
 3. 引入 CompositeCommand / TransactionCommand，保证批量操作一次提交、一次撤销、失败整体回滚。
@@ -184,6 +190,16 @@ interface CommandResult {
     code: string;
     message: string;
     retryable: boolean;
+    conflict?: {
+      expectedProjectRevision?: number;
+      actualProjectRevision?: number;
+      entityId?: string;
+      expectedEntityRevision?: number;
+      actualEntityRevision?: number;
+      resourceRef?: string;
+      expectedResourceRevision?: number;
+      actualResourceRevision?: number;
+    };
   };
 }
 
@@ -243,6 +259,9 @@ interface DerivedState {
 - PlaybackState 由 Animation Playback Controller 更新，不得伪装成 InteractionState。
 - 派生数据通过 selector 或缓存服务计算。
 - Store 更新必须产生明确 revision / change notification。
+- 每个持久化 Command / Transaction 都必须携带 expectedProjectRevision 与受影响实体 / 资源的 expected revisions；本地 Store 校验和持久化 CAS 均通过后才可发布提交结果。
+- Project revision 用于防止跨 Workspace / 跨标签页的丢失更新；Entity revision 用于精确识别目标数据是否变化；Resource revision / 内容摘要用于防止 Mask、PNG 等外部资源被静默替换。
+- 并发冲突不自动采用 last-write-wins。可在刷新后由应用层重新计算无冲突命令，但必须重新校验用户意图和所有目标版本。
 - ProjectDocument.revision 在每个成功提交的持久化业务事务后递增；实体 revision 按各自领域规格递增。UI 状态变化不递增 ProjectDocument.revision。
 - 深层对象不得通过共享引用在组件间被修改。
 
@@ -291,12 +310,19 @@ interface Command<TPayload = unknown> {
   payload: TPayload;
   label: string;
   affectedIds: string[];
+  expectedProjectRevision: number;
+  expectedEntityRevisions: Record<string, number>;
+  expectedResourceRevisions?: Record<string, number>;
   execute(context: CommandContext): CommandResult;
-  undo(context: CommandContext): void;
+  undo(context: CommandContext): CommandResult;
 }
 ```
 
 - undo 是必填，不允许 optional。
+- Command 创建时记录 expectedProjectRevision、受影响实体的 expectedEntityRevisions，以及所依赖 / 替换资源的 expectedResourceRevisions。
+- Command 执行前先校验实体与资源 revision；写入持久化层时再以 expectedProjectRevision 执行 compare-and-swap。任一校验失败都返回 conflict，不得部分修改。
+- Project revision 不匹配时即使目标实体 revision 看似未变，也不得直接写入；调用方需刷新项目快照、重新验证命令意图，再创建新 Command。
+- Command 执行成功后记录 before / after revision，供 undo / redo 做反向冲突检查。
 - Command 执行前应准备可逆所需的旧值 / inverse patch。
 - execute 失败不得留下部分数据变更。
 - 确实无需撤销的内部维护动作（例如纯缓存预热）不是 Project Command，不进入 History。
@@ -324,6 +350,9 @@ interface CompositeCommand extends Command {
 5. 父事务 redo 重新执行全部子命令。
 6. 子命令不单独进入顶层 History，避免一次批量操作产生多条撤销记录。
 7. 自动校准、AI 建议批量应用、批量属性修改、批量导入均遵守该规则。
+8. CompositeCommand 的所有子命令在同一暂存 Project 快照中执行；只在全部成功且 Project revision compare-and-swap 成功后一次性持久化并发布新状态。不得逐个子命令对外暴露已提交状态。
+9. 事务涉及的 Mask / PNG 等资源先写入临时资源区；Project 文档提交成功后再确认资源引用。事务失败时清理未引用临时资源，不能留下半更新资源引用或损坏旧资源。
+10. 若 Project revision 或任一目标实体 / 资源 revision 不匹配，整个事务失败；不得只提交未冲突的子命令。
 
 ### 7.4 History
 - 支持 undo / redo。
@@ -336,6 +365,9 @@ interface CompositeCommand extends Command {
 - 历史容量可配置；大图 mask 应评估快照内存，必要时使用差异记录或压缩快照。
 - UpdateSpriteMask 的 undo / redo 必须恢复 Mask 资源引用及像素内容；Mask 资源不得只存在于 Canvas 或内存缓存。
 - undo / redo 必须同时恢复业务数据与来源标记、锁定标记等关联字段。
+- undo / redo 不得把 revision 数值回退；每次成功的撤销或重做都是新的持久化事务，Project 与受影响实体 revision 按规则继续递增。
+- 每个 History 项保存 execute 后的实体 / 资源 revision。undo 前必须确认当前 revision 仍等于该项预期的 after revision；redo 前必须确认当前 revision 等于 undo 成功后记录的 revision。
+- 若实体或资源已被外部事务修改，undo / redo 必须拒绝并报告冲突；不得用旧 inverse patch 覆盖外部新数据。用户刷新并解决冲突后，可重新执行新的明确操作。
 
 ### 7.5 事务 API
 事务支持：
@@ -344,7 +376,7 @@ interface CompositeCommand extends Command {
 - commitTransaction()
 - rollbackTransaction()
 
-批量操作必须原子化：要么全部成功，要么恢复到执行前状态。事务提交前不对其他订阅者暴露半成品 Project 状态；若实现采用暂存状态，只有 commit 后才发布一次正式 revision。
+批量操作必须原子化：要么全部成功，要么恢复到执行前状态。事务提交前不对其他订阅者暴露半成品 Project 状态；若实现采用暂存状态，只有 commit 后才发布一次正式 revision。持久化提交必须使用 expectedProjectRevision compare-and-swap；冲突时回滚暂存数据并返回结构化 conflict。
 
 ## 8. Store 与渲染同步
 
@@ -457,6 +489,10 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 组件无法直接修改 Project。
 - Mask 修改后保存、关闭、重新打开，Mask 像素与 contentVersion 保持一致。
 - Mask Command 的 undo / redo 精确恢复前后像素；失败事务不留下部分 Mask 资源。
+- 两个 Workspace / 标签页从相同 Project revision 开始写入时，第二个过期提交必须收到 conflict；不得覆盖第一个提交。
+- 目标 Entity revision 变化时 Command 被拒绝；无关 Entity revision 变化不应被误判为目标实体冲突，但 Project 持久化 CAS 仍须按全局 revision 处理并刷新后重试。
+- 外部更新目标实体后执行旧 History undo / redo，必须拒绝并显示冲突，不得覆盖外部值。
+- Mask / PNG 资源写入与 Project Manifest 引用提交原子一致；失败后旧资源仍可读取，新临时资源不会成为有效引用。
 - 旧 revision 异步结果不能覆盖新状态；无关实体 revision 变化不得无条件使所有任务过期。
 - ViewportState、CommandResult 的字段符合本规格定义，所有业务实体 revision 递增规则符合总体架构与 Animation System 规格。
 - InteractionSnapshot 只反映状态，不包含真实 pointer session 或可变 draft。
@@ -468,6 +504,8 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 批量操作一次撤销全部恢复。
 - CompositeCommand 中途失败时已执行子命令全部回滚，且不产生 History 项。
 - undo 后 redo 恢复相同数据。
+- undo / redo 成功后 revision 单调递增；revision 不回滚。
+- 外部修改后旧 History 项的 undo / redo 被冲突保护拒绝。
 - 新操作提交后 redo 栈清空。
 - undo / redo 恢复 calibrationSource、locked 等关联字段。
 
