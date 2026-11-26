@@ -1,13 +1,20 @@
 # V10 Interaction Manager 与 Reactive Store 技术规格
 
-> 文档版本：V1.4
-> 文档状态：修订设计基线（Implementation Blueprint）
+> 文档版本：V1.5
+> 文档状态：冻结设计基线（Frozen Implementation Baseline）
 > 目标：从根本上解决 V9 多布尔交互模式冲突、指针生命周期不完整、数据更新后面板不同步的问题。
 > 约束：真实交互会话与项目数据分离；业务数据修改必须通过 Command；Reactive Store 是项目数据与可观察应用状态的权威来源。
 
-## 0. V1.4 修订记录
+## 0. V1.5 修订记录
 
-本版在 V1.3 基础上补充 Project / Entity / Resource revision 的乐观并发校验，明确 CompositeCommand 持久化原子性，以及 undo / redo 防止覆盖外部新数据的规则；Interaction Manager 与 Store 的状态归属保持不变。
+本版在 V1.4 基础上冻结 Revision expectation 类型与来源、Create / undo / redo 版本取值、资源版本 CAS，以及 target-entity / resource / project-cas 三类冲突的分类和 Rebase 边界；资源 GC 与 History 保留策略引用总体架构 V1.5 Revision Matrix。
+
+V1.5 冻结决策：
+1. Command 的 Project、Entity、Resource expected 值必须来自创建命令时的同一不可变 Store 快照。
+2. Create 对新 ID 使用 absent expectation；Update / Delete 使用 present revision expectation；资源 expectation 同时包含 revision 与 contentHash。
+3. 冲突分类固定为 target-entity、resource、project-cas；只有无关 Project 字段变化且读写集 / 资源均未变化时允许自动 rebase 一次。
+4. 实体或资源冲突必须刷新并重新计算；校准、Trim、Mask、批量事务等结果必须重新 Preview，涉及用户数据语义变化时要求二次确认。
+5. undo / redo 冲突不自动 rebase，不覆盖外部修改；History 保留项与其资源引用按总体架构 V1.5 的保留期和 GC 规则处理。
 
 V1.4 进一步明确：
 1. Command 执行前校验 expectedProjectRevision、所有受影响实体的 expectedEntityRevisions，以及需要读取 / 替换的 expectedResourceRevisions。
@@ -191,14 +198,18 @@ interface CommandResult {
     message: string;
     retryable: boolean;
     conflict?: {
-      expectedProjectRevision?: number;
-      actualProjectRevision?: number;
+      kind: "target-entity" | "resource" | "project-cas";
       entityId?: string;
       expectedEntityRevision?: number;
       actualEntityRevision?: number;
-      resourceRef?: string;
+      resourceId?: string;
       expectedResourceRevision?: number;
       actualResourceRevision?: number;
+      expectedContentHash?: string;
+      actualContentHash?: string;
+      expectedProjectRevision?: number;
+      actualProjectRevision?: number;
+      affectedIds?: string[];
     };
   };
 }
@@ -252,6 +263,7 @@ interface DerivedState {
 
 ### 6.2 读写规则
 - 组件通过 selector 读取所需状态。
+- Command 的 expectedProjectRevision / expectedEntityRevisions / expectedResourceRevisions 必须从同一不可变 Store 快照生成；具体 expectation 类型见 7.2。
 - 组件不得直接 mutate Project 对象。
 - Project 更新通过 Command Bus。
 - UI 状态可通过独立 UI actions 更新。
@@ -304,26 +316,36 @@ selector 应尽量返回稳定引用或使用 memoization，避免无关状态�
 所有进入项目 History 的 Command 必须提供完整撤销语义：
 
 ```ts
+type EntityExpectation =
+  | { state: "absent" }
+  | { state: "present"; revision: number };
+
+type ResourceExpectation =
+  | { state: "absent" }
+  | { state: "present"; revision: number; contentHash: string };
+
 interface Command<TPayload = unknown> {
   id: string;
   type: string;
   payload: TPayload;
   label: string;
-  affectedIds: string[];
+  readEntityIds: string[];             // 计算 / 决策所依赖的实体集合
+  affectedIds: string[];               // 本次写入实体集合
   expectedProjectRevision: number;
-  expectedEntityRevisions: Record<string, number>;
-  expectedResourceRevisions?: Record<string, number>;
+  expectedEntityRevisions: Record<string, EntityExpectation>;
+  expectedResourceRevisions: Record<string, ResourceExpectation>;
   execute(context: CommandContext): CommandResult;
   undo(context: CommandContext): CommandResult;
 }
 ```
 
 - undo 是必填，不允许 optional。
-- Command 创建时记录 expectedProjectRevision、受影响实体的 expectedEntityRevisions，以及所依赖 / 替换资源的 expectedResourceRevisions。
-- Command 执行前先校验实体与资源 revision；写入持久化层时再以 expectedProjectRevision 执行 compare-and-swap。任一校验失败都返回 conflict，不得部分修改。
-- Project revision 不匹配时即使目标实体 revision 看似未变，也不得直接写入；调用方需刷新项目快照、重新验证命令意图，再创建新 Command。
-- Command 执行成功后记录 before / after revision，供 undo / redo 做反向冲突检查。
-- Command 执行前应准备可逆所需的旧值 / inverse patch。
+- Command 创建时捕获同一个不可变 Store 快照：expectedProjectRevision 取该快照的 ProjectDocument.revision；readEntityIds 与 affectedIds 涉及的实体均记录 expectedEntityRevisions；读取或替换的二进制资源记录 expectedResourceRevisions（resourceId + revision + contentHash）。禁止跨不同时间点拼接 expected 值。
+- Create 的新实体 / 资源使用 state=absent；同时校验父集合、所属 Clip / Set、引用目标等 read-set 实体版本。Update / Delete 使用 state=present，并校验 revision；资源替换还必须校验 contentHash。
+- Command 执行时先校验目标实体与资源 expectation，再写入不可变资源字节，最后以 expectedProjectRevision 对 Project Manifest 执行 compare-and-swap。Manifest CAS 成功前不得发布新引用；任一检查失败均返回结构化 conflict，不得部分修改。
+- Project revision 不匹配时，即使目标实体 revision 看似未变，也不能直接写入；按 7.6 冲突流程刷新、判断读写集并决定是否 rebase。
+- Command 成功后记录 before / after entity revision、resource revision / contentHash 与 Project revision，供 undo / redo 做反向冲突检查。
+- Command 执行前应准备可逆所需的旧值 / inverse patch；涉及二进制资源时，History 必须 pin 对应的旧 contentHash 字节，遵循总体架构 V1.5 的保留期与 GC 契约。
 - execute 失败不得留下部分数据变更。
 - 确实无需撤销的内部维护动作（例如纯缓存预热）不是 Project Command，不进入 History。
 - 不得通过给 Command 标注“不可撤销”来绕过业务数据撤销要求。
@@ -366,9 +388,32 @@ interface CompositeCommand extends Command {
 - UpdateSpriteMask 的 undo / redo 必须恢复 Mask 资源引用及像素内容；Mask 资源不得只存在于 Canvas 或内存缓存。
 - undo / redo 必须同时恢复业务数据与来源标记、锁定标记等关联字段。
 - undo / redo 不得把 revision 数值回退；每次成功的撤销或重做都是新的持久化事务，Project 与受影响实体 revision 按规则继续递增。
-- 每个 History 项保存 execute 后的实体 / 资源 revision。undo 前必须确认当前 revision 仍等于该项预期的 after revision；redo 前必须确认当前 revision 等于 undo 成功后记录的 revision。
-- 若实体或资源已被外部事务修改，undo / redo 必须拒绝并报告冲突；不得用旧 inverse patch 覆盖外部新数据。用户刷新并解决冲突后，可重新执行新的明确操作。
+- 每个 History 项保存 before / after entity revision、resource revision / contentHash，以及 Project revision。undo 前必须确认当前版本仍等于该项 execute 后的 after 版本；redo 前必须确认当前版本等于 undo 成功后记录的新版本。
+- undo / redo 成功时创建新的 revision；Create 的 undo 形成 RevisionLedger tombstone，redo 使用原逻辑 ID 并从 tombstone 水位继续递增。资源恢复旧字节时 contentHash 可回到历史值，但 resource revision 仍递增。
+- 若实体、资源或 Project CAS 已被外部事务修改，undo / redo 必须拒绝并报告冲突；不得自动 rebase，不得用旧 inverse patch 覆盖外部新数据。History 项保留供用户查看 / 解决，直至用户明确丢弃或达到保留上限。
 
+### 7.6 Conflict Classification 与 Rebase 流程
+
+所有并发冲突必须返回 CommandResult.error.conflict.kind，取值只允许 target-entity / resource / project-cas。一次事务可以检测到多个冲突；返回主冲突类型的同时，affectedIds 与具体 expected / actual 字段必须足以定位其余冲突。冲突不等于普通校验错误，不得自动降级为 last-write-wins。
+
+| 冲突类型 | 判定条件 | 默认处理 | 是否可自动重试 |
+|---|---|---|---|
+| target-entity | read-set / write-set 中任一目标实体 revision 与 expected 不同，或实体已删除 / 新增状态与 expectation 不符 | 重新读取目标实体；根据最新值重新计算 Command。绝对字段赋值可提供“按原意重新应用”操作，但须形成新 Command；几何、Mask、Trim、Pivot 校准、RebasePivotTarget、批量变更必须重新 Preview，并在影响用户数据时二次确认 | 不自动重试 |
+| resource | resourceId 的 revision 或 contentHash 与 expected 不同，资源缺失、字节校验失败或被替换 | 重新读取资源字节并校验 hash；任何依赖旧像素 / Mask 的算法结果必须重新计算。Trim、Mask、自动校准与导出必须重新 Preview / QA；用户确认后创建新 Command | 不自动重试 |
+| project-cas | 目标实体 / 资源 expectation 通过，但 ProjectDocument.revision 已变化 | 刷新完整 Project 快照，重新检查 read-set、write-set、父集合、唯一性、顺序和跨实体约束 | 仅满足下述安全 Rebase 条件时自动重试一次 |
+
+**Project CAS 安全 Rebase 条件：**
+1. 刷新后，Command 的所有 readEntityIds / affectedIds 对应实体 revision 与原 expected 完全一致；所有资源 revision 与 contentHash 也完全一致。
+2. 新 Project revision 变化只来自与本 Command 无关的实体 / 设置；没有改变本 Command 依赖的父集合、成员关系、数组顺序、唯一性约束、全局设置或跨实体不变量。
+3. Command 是确定性的、基于显式 ID 的局部更新，不依赖旧 Project 快照中的全局排序 / 计数 / 隐式默认值；不是基于旧像素数据生成的异步结果。
+4. 满足以上条件时，使用刷新后的 Project 快照重建 Command，仅更新 expectedProjectRevision，保持实体 / 资源 expectation 不变，自动重试一次。再次 CAS 失败则停止并交由用户处理。
+5. 任一条件不满足，必须基于最新 Project 重新计算 Command；若影响素材内容、帧对齐、集合关系、批量目标或用户可见结果，先展示差异 / Preview，再要求用户确认。
+
+**CompositeCommand 规则：** 任一子命令发生 target-entity 或 resource 冲突，整个事务回滚；不得只提交未冲突子命令。project-cas 冲突时只有整个 CompositeCommand 的 read-set / write-set 与资源 expectation 全部满足安全 Rebase 条件，才允许整体重建并重试一次，否则重新计算整组结果并二次确认。
+
+**undo / redo 规则：** 任何类型冲突均不自动 Rebase。保留 History 项与其资源引用，显示冲突对象和当前值；用户可刷新后放弃该历史操作，或在明确确认后将期望结果作为一个全新的补偿 Command 应用。不得提供绕过 revision 检查的强制覆盖按钮。
+
+**资源暂存与垃圾回收：** 新资源按事务 ID 写入 staging，校验字节数 / contentHash 后再提交 Project CAS；CAS 成功后才允许 Manifest 引用新 ResourceVersion。失败事务立即释放 staging lease。崩溃遗留 staging 与无引用资源的 24 小时 GC 宽限期、History 资源 pin 及默认 30 天 / 100 项 / 1 GiB 保留策略，以《01-总体架构与模块迁移方案》Revision Matrix 为唯一数值来源。
 ### 7.5 事务 API
 事务支持：
 - beginTransaction(label)
@@ -494,7 +539,7 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - 外部更新目标实体后执行旧 History undo / redo，必须拒绝并显示冲突，不得覆盖外部值。
 - Mask / PNG 资源写入与 Project Manifest 引用提交原子一致；失败后旧资源仍可读取，新临时资源不会成为有效引用。
 - 旧 revision 异步结果不能覆盖新状态；无关实体 revision 变化不得无条件使所有任务过期。
-- ViewportState、CommandResult 的字段符合本规格定义，所有业务实体 revision 递增规则符合总体架构与 Animation System 规格。
+- ViewportState、CommandResult 的字段符合本规格定义；Revision Matrix、Create / undo / redo 水位规则符合总体架构 V1.5；三类冲突的 retry / rebase 行为符合本节。
 - InteractionSnapshot 只反映状态，不包含真实 pointer session 或可变 draft。
 
 ### 12.4 History 测试
