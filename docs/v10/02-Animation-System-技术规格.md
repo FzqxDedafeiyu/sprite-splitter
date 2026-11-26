@@ -1,15 +1,20 @@
 # V10 Animation System 技术规格
 
-> 文档版本：V1.3
+> 文档版本：V1.4
 > 文档状态：修订设计基线（Implementation Blueprint）
 > 范围：动作组、动画帧、枢轴预设、自动校准、预览、质量检查和导出。
 > 关键决策：角色与物体共用动画系统；组级与单帧级双向校准；自动校准支持预览和自动应用；导出支持 PNG 序列 + JSON 与 Sprite Sheet。
 
-## 0. V1.3 修订记录
+## 0. V1.4 修订记录
 
-本版根据 V9→V10 迁移模拟与真实资产推演报告，补充动画数据迁移边界，并澄清 Scene Anchor 不能作为 Animation Pivot。
+本版在 V1.3 基础上冻结 Source Local、Sprite Local 与 Clip Canvas 三种坐标空间，明确 Trim 坐标转换只执行一次，并补充手工 / 导入校准保护及并发结果校验。
 
-V1.3 关键决策：
+V1.4 关键决策：
+- Source Local 表示未裁切源画布坐标；Sprite Local 表示当前 Sprite PNG 的实际像素坐标。若 sourceLocal 裁切原点为 Rᵢ，则 Pᵢ = Qᵢ - Rᵢ；Pᵢ 一旦转换为 spriteLocal，渲染公式不得再次减去 Trim。
+- PivotPreset 几何候选默认直接从当前 Sprite PNG 的 Alpha 数据计算，输出 spriteLocal；只有来源明确提供 sourceLocal 坐标时才执行一次 sourceLocal → spriteLocal 转换。
+- Atlas Pack Trim 与 SpriteAsset 本身的裁切是不同层级；Atlas Trim 只影响图集存储与重建，不改变动画领域的 Pᵢ / T / Oᵢ。
+- 自动校准默认跳过 calibrationSource=manual / imported 的帧；只有显式包含受保护帧并二次确认，才允许覆盖。
+- 自动计算结果与 Command 提交均校验 Project、Clip、目标 Frame 与资源 revision；冲突必须拒绝，不得静默覆盖。
 - V9 的 scene anchor 是场景标注，不是动画枢轴；不得从 `anchor - sourceRect.origin` 直接推导 animation pivotLocal。
 - V9 的 `spatial-scene-layout/v2` 不包含 AnimationSet / Clip / Frame 序列定义；仅凭场景 Manifest 不得自动生成动画组或动画帧。
 - 若用户或独立 Agent 明确提供了动作组、帧顺序和动作语义，可建立待确认的 AnimationSet / Clip；来源数据未提供可靠 pivot / offset 时，使用几何候选并将 offset 初始化为 (0,0)。
@@ -42,35 +47,40 @@ Animation System 让切割后的 Sprite Asset 可以被组装成可预览、可�
 
 ## 2. 核心术语与坐标空间
 
-### 2.1 spriteLocal
-单个 Sprite 裁切图像左上角为 (0,0)，单位为源像素。Sprite 宽高为 sourceWidth / sourceHeight。Frame Pivot Local 位于此坐标空间。
+### 2.1 Source Local（sourceLocal）
+未裁切 SourceImage 原始画布坐标，左上角为 (0,0)，单位为源像素。若同一项目存在多张 SourceImage，sourceLocal 坐标必须同时关联 sourceImageId，不可跨图像直接比较。
 
-### 2.2 clipCanvas
-一个 Animation Clip 的规范画布坐标系，原点位于画布左上角。所有帧最终都在这个坐标系中合成。Clip 具有 canvas.width / canvas.height；在文档语义中该字段表示 clipCanvas 尺寸。
+### 2.2 Sprite Local（spriteLocal）
+当前 Sprite PNG 实际像素画布的局部坐标，左上角为 (0,0)。AnimationFrame.alignment.pivotLocal、Sprite 多边形 points 与 Mask 均以此空间为基准。Sprite 宽高等于当前 PNG 的实际像素宽高。
 
-### 2.3 Frame Pivot Local（Pᵢ）
-每帧在 spriteLocal 中的枢轴坐标。它描述「这个 Sprite 上哪个像素点对应动作语义锚点」，例如脚底中心、骨盆或物体铰链。
+### 2.3 Clip Canvas（clipCanvas）
+一个 Animation Clip 的规范画布坐标系，原点位于画布左上角。所有帧最终都在这个坐标系中合成。Clip 具有 canvas.width / canvas.height；该字段表示 clipCanvas 尺寸。
 
-### 2.4 Clip Pivot Target（T）
+### 2.4 Trim Offset（Rᵢ）
+对于从原始 SourceImage 裁切得到的 Sprite，Rᵢ 表示当前 Sprite PNG 左上角在对应 sourceLocal 中的位置。若 Sprite 是从 sourceLocal 矩形 (x,y,width,height) 裁切而来，则 Rᵢ=(x,y)。Rᵢ 必须与 sourceRect / Trim 元数据一致；来源未知时不得伪造 Rᵢ。
+
+### 2.5 Source Pivot（Qᵢ）与 Frame Pivot Local（Pᵢ）
+Qᵢ 是明确以 sourceLocal 表达的枢轴点；Pᵢ 是同一枢轴点转换到当前 Sprite PNG 后的 spriteLocal 坐标。转换关系仅执行一次：
+
+```text
+Pᵢ = Qᵢ - Rᵢ
+Qᵢ = Pᵢ + Rᵢ
+```
+
+若输入本身已提供 spriteLocal 的 Pᵢ，则直接使用，不得再减 Rᵢ。若裁切后 Qᵢ 落在当前 Sprite PNG 范围之外，该点不能作为当前 Sprite 的有效 Pivot；必须报告超界并要求确认，不得 clamp 后伪装为原值。
+
+### 2.6 Clip Pivot Target（T）
 动作组在 clipCanvas 中的统一目标位置。播放时，各帧的 Frame Pivot Local 映射到 T。预览视图可以把 T 固定在 viewport 的参考位置。
 
-### 2.5 Frame Offset（Oᵢ）
-每帧相对于组级对齐结果的微调向量，单位为像素，**表达在 clipCanvas 坐标空间**。它是 Pivot 对齐完成后的平移修正量，不是 Sprite 几何中心偏移，也不是以统一画布中心为原点的绝对坐标。
+### 2.7 Frame Offset（Oᵢ）
+每帧相对于组级对齐结果的微调向量，单位为像素，表达在 clipCanvas 坐标空间。它是 Pivot 对齐完成后的额外平移修正量，不是 Sprite 几何中心偏移，也不是以统一画布中心为原点的绝对坐标。
 
-因此，帧的有效枢轴位置为 T + Oᵢ。拖动帧图像时，写入 Oᵢ；拖动 Pivot 标记时，修改 Pᵢ。两种操作必须使用不同工具状态。
-
-### 2.6 Scene Anchor
+### 2.8 Scene Anchor
 场景布局系统中的 sceneWorld 空间参考标记。V9 Anchor 不参与 Sprite 绘制定位，也不代表角色脚底、骨盆、物体铰链等动画语义点。它不参与 Animation Clip 的帧对齐计算，也不与 T / Pᵢ / Oᵢ 共用字段。
 
-### 2.7 唯一渲染位置公式
+### 2.9 唯一渲染位置公式
 
-设：
-- Sprite 图像尺寸为 Wᵢ × Hᵢ；
-- 当前帧局部枢轴为 Pᵢ = (pᵢx, pᵢy)，单位 spriteLocal 像素；
-- Clip 目标枢轴为 T = (tx, ty)，单位 clipCanvas 像素；
-- 帧偏移为 Oᵢ = (ox, oy)，单位 clipCanvas 像素。
-
-Sprite 在 clipCanvas 中的左上角位置 Dᵢ 为：
+设当前帧 pivotLocal 为 Pᵢ=(pᵢx,pᵢy)，Clip 目标枢轴为 T=(tx,ty)，Frame Offset 为 Oᵢ=(ox,oy)，则 Sprite 在 clipCanvas 中的左上角位置 Dᵢ 为：
 
 ```text
 Dᵢ = T - Pᵢ + Oᵢ
@@ -78,34 +88,21 @@ drawX = tx - pᵢx + ox
 drawY = ty - pᵢy + oy
 ```
 
-Sprite 像素坐标 (u,v) 对应 clipCanvas 位置：
-```text
-(drawX + u, drawY + v)
-```
+Sprite 像素坐标 (u,v) 对应 clipCanvas 位置 (drawX+u, drawY+v)。
 
-**Offset 初始化规则：** 当一帧只有 pivotLocal 候选而没有来源可靠的额外位移修正时，offset 必须初始化为 (0,0)。组级对齐已经由 T - Pᵢ 完成，不能再把 (Pᵢ - T) 写入 offset，否则会抵消枢轴对齐并引入反向偏移。只有用户明确校准或来源格式明确提供同一 clipCanvas 坐标语义的帧级修正时，才导入非零 offset。
+**Trim 只负责坐标转换，不在渲染公式中重复补偿。** 若来源 Pivot 是 sourceLocal，先计算 Pᵢ=Qᵢ-Rᵢ，再代入 Dᵢ=T-Pᵢ+Oᵢ；若 Pᵢ 已经是 spriteLocal，直接代入公式。Offset 只表达额外的用户 / 来源修正；无额外修正时 Oᵢ=(0,0)。
 
-该公式已经将 Sprite 局部枢轴换算为图像左上角位置。**不得再根据 Wᵢ / Hᵢ 自动追加半宽、半高或几何中心修正**，否则会重复计算并造成帧尺寸不同步时的二次偏移。
+该公式已经将 Sprite 局部枢轴换算为图像左上角位置。不得再根据 Wᵢ/Hᵢ 自动追加半宽、半高或几何中心修正。也不得在 Pᵢ 转换时减过 Rᵢ 后，又在 Dᵢ 计算或 Oᵢ 中重复减 / 加同一 Trim。
 
-坐标转换规则：
-- Pᵢ 始终以 Sprite 实际图像左上角为原点，属于 spriteLocal。
-- T 和 Oᵢ 属于 clipCanvas。
-- 先用 T - Pᵢ 完成 Pivot 对齐，再加 Oᵢ 做帧级平移修正。
-- viewport 缩放、平移只作用于最终显示变换，不写入 Pᵢ / T / Oᵢ。
-- 组级调整或 Pivot Target 重基必须使用明确命令保持最终 Dᵢ 连续，不能简单清零 offset。
-
-### 2.8 Trim 坐标还原
-
-动画源 Sprite 与 Atlas 打包 Trim 是两个层次：
-- AnimationFrame 引用的 spriteId 指向未被 Atlas Pack 改写的原始 SpriteAsset。
+### 2.10 Atlas Pack Trim
+Atlas Pack Trim 是导出图集时对 Sprite PNG 透明边缘的存储优化，与 SpriteAsset 从 SourceImage 裁切得到的 Trim 是不同层级：
+- AnimationFrame 仍引用未被 Atlas Pack 改写的 SpriteAsset。
 - Atlas Trim 只改变图集中的存储矩形，不改变 AnimationFrame 的 Pᵢ、T、Oᵢ 或规范渲染位置。
-- Trim 元数据必须保留 sourceSize、spriteSourceSize、trimOffset（或等价字段），并明确 trimOffset 是从未 Trim 源画布左上角到实际裁切矩形左上角的 spriteLocal 像素偏移。
-- 由 Atlas 重建原始帧时，必须把裁切矩形放回 sourceSize 指定的画布位置，再按 Dᵢ 合成。
+- 必须保留 sourceSize、spriteSourceSize、trimOffset（或等价字段），并明确 trimOffset 是从未 Trim 的 Sprite 画布左上角到图集裁切矩形左上角的 spriteLocal 偏移。
+- 从 Atlas 重建帧时，先将裁切图像放回 sourceSize 指定的 Sprite 画布位置，再按 Dᵢ 合成。
 - 不得把 Atlas rect.x / rect.y 当成动画帧的 clipCanvas 位置。
-- Trim 与非 Trim 导出的抽样渲染结果必须一致。
-- 所有权威 Pivot / Offset 在计算与存储阶段保留浮点精度；不得在拖拽、自动校准或 Manifest 生成前提前取整。
-- 像素风预览的取整仅发生在最终 Canvas 绘制阶段，使用项目 renderSnap 策略（round / floor / none）；预览取整不得回写项目数据。
-- 导出器必须声明输出像素对齐策略；如导出 PNG 已按整数像素栅格化，应保证同一策略下预览与导出一致。
+- 所有权威 Pivot / Offset 在计算与存储阶段保留浮点精度；像素风预览取整只发生在最终 Canvas 绘制阶段，使用项目 renderSnap 策略。预览取整不得回写项目数据。
+- 导出器必须声明输出像素对齐策略；同一策略下预览与导出应一致。
 
 ## 3. 领域模型
 
@@ -281,12 +278,13 @@ interface PivotPreset {
 - geometry_auto 可重新计算。
 - manual 默认锁定保护。
 - imported 默认保护。
+- 自动校准默认跳过 manual / imported 帧；这项保护独立于普通“强制覆盖”选项。
 - ai_suggested 仅为候选，不改变生效数据。
 - 用户确认 AI 建议后，来源标记为 accepted_ai；用户后续直接手工调整该值时，来源改为 manual。
 
 强制覆盖规则：
 - 普通“强制覆盖”仍不得越过 manual / imported 保护。
-- 只有用户额外勾选“包含手工 / 导入帧”并完成二次确认，才允许覆盖这些帧。
+- 只有用户额外勾选“包含手工 / 导入帧”并完成二次确认，才允许覆盖这些帧；实现参数应显式表达为 includeProtectedSources=true，不得仅依赖含义模糊的 force=true。
 - 被跳过、被覆盖、被保护的帧都必须在结果摘要中分别列出。
 - 锁定帧优先级高于自动覆盖策略；若要覆盖锁定帧，必须显式解除锁定并二次确认。
 
@@ -323,8 +321,8 @@ CalibrationResult：
 - 一次提交，一次撤销。
 - 记录 algorithmVersion、时间、参数、修改帧和跳过帧。
 - 应用失败时整批回滚。
-- 执行前校验 Clip 仍存在且 clipRevision 未变化，并逐一校验本次将修改的 Frame revision 与计算快照一致。
-- 无关 Frame 的修改不应使整组结果自动过期；被修改目标 Frame 的 revision 变化则对应结果过期。
+- 执行前校验 Project / Clip / 目标 Frame revision 快照，并逐一校验本次将修改的 Frame revision 与计算快照一致；持久化阶段还必须执行 Project revision compare-and-swap。
+- 无关 Frame 的修改不应使整组结果自动过期；被修改目标 Frame 的 revision 变化则对应结果过期。若 Project revision 因其他事务变化，先由持久化层拒绝旧快照提交；应用层可重新读取并验证受影响实体后重新生成 / 确认命令，不得直接 last-write-wins。
 - Project revision 用于诊断和整体快照追踪，不单独作为唯一失效条件，避免无关项目编辑导致结果全部作废。
 - 用户确认应用过期结果时，必须重新展示差异，并通过 Command 校验目标实体仍存在；不得静默覆盖新值。
 
@@ -516,13 +514,15 @@ V9 的 `spatial-scene-layout/v2` 是场景布局协议，不定义动画动作�
 
 ### 10.2 Offset 迁移算例
 
-设组目标枢轴 T=(57,83)，第二帧 pivotLocal P₂=(51,81)，且来源没有额外帧偏移。则：
+设组目标枢轴 T=(57,83)，第二帧 pivotLocal P₂=(51,81) 已经是当前裁切 PNG 的 spriteLocal，且来源没有额外帧偏移。则：
 ```text
 D₂ = T - P₂ + O₂
    = (57,83) - (51,81) + (0,0)
    = (6,2)
 ```
 此时第二帧的局部枢轴映射到 T，已经完成对齐。若再写入 O₂=(-6,-2)，则有效枢轴变为 (51,81)，偏离目标 T。因此，迁移报告中仅由两个 Pivot 坐标相减得到的 (-6,-2) 不能作为自动导入 Offset；除非它被明确证明是额外的 clipCanvas 视觉修正量。
+
+**Trim 坐标辨析算例：** 若外部来源给出的枢轴 Q₂=(51,81) 明确属于 sourceLocal，且裁切原点 R₂=(6,2)，则先转换为 P₂=(45,79) spriteLocal，再计算 D₂=(57,83)-(45,79)=(12,4)。这与“P₂=(51,81) 已是 spriteLocal”的前一算例不是同一输入。不得仅凭数值相同的 `pivot` 字段猜测坐标空间；来源未声明时必须标记坐标语义未知并要求确认，不能自动减 Trim。
 
 ## 11. 命令与历史记录
 
@@ -568,6 +568,11 @@ D₂ = T - P₂ + O₂
 - 同一个 Sprite 可被多个 Clip 引用。
 - 组级校准后各帧 Pivot 对齐。
 - 不同 Sprite 宽高下，公式 Dᵢ = T - Pᵢ + Oᵢ 计算无额外中心补偿。
+- Trim 测试覆盖 R=(0,0)、非零正偏移、负 / 超界输入、sourceLocal Pivot 转换一次、spriteLocal Pivot 不重复转换，以及 sourceRect 未知时阻断转换。
+- 同一帧以 sourceLocal Q-R 与预先换算的 spriteLocal P 输入时，最终渲染位置完全一致。
+- Trim 后 Pivot 超出当前 Sprite 范围时产生明确 QA 错误，不得静默 clamp。
+- 自动校准默认跳过 manual / imported；显式包含受保护帧需二次确认并在结果摘要中列出覆盖对象。
+- 目标 Frame revision 变化时拒绝旧校准结果；无关 Frame 变化不使目标帧结果无条件过期。
 - V9 sceneAnchor 不被误读为 animationPivot。
 - 仅有 V9 场景 Manifest 时不自动创建 AnimationSet / Clip / Frame。
 - 无来源偏移时所有新导入帧 offset=(0,0)；不得将 Pᵢ-T 或 T-Pᵢ 重复写入 Offset。
