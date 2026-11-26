@@ -473,6 +473,30 @@ Manifest 示例：
 - V10 动画 ZIP 使用独立文件命名和 anim/manifest.json 路径；V9 场景 ZIP 继续使用 sprites/NNN_名称.png + manifest.json，不互相覆盖。
 
 ### 9.2 Sprite Sheet
+
+Atlas 导出资源采用不可变内容寻址描述：
+
+```ts
+interface AtlasImageResource {
+  assetRef: string;        // 当前导出包内路径
+  contentHash: string;     // sha256:<64 lowercase hex>，对完整 PNG 字节计算
+  byteLength: number;
+  mimeType: "image/png";
+}
+
+interface AtlasFrameExport {
+  atlasImage: AtlasImageResource;
+  frameRect: Rect;         // atlasImage 像素坐标
+  sourceSize: { width: number; height: number }; // 完整 SpriteAsset spriteLocal 画布尺寸
+  spriteSourceSize: Rect; // atlasTrimOffset 所在的 spriteLocal 裁切矩形
+  atlasTrimOffset: Point; // spriteLocal
+  pivotLocal: Point;      // 权威 spriteLocal
+  pivotAtlasLocal?: Point;// 裁切图局部坐标，仅适配器需要时输出
+}
+```
+
+Atlas 图像不使用可变 revision：一次导出生成一个 contentHash；重新打包即生成新的 hash 与输出路径，禁止覆盖仍被既有 Manifest 引用的字节。加载 / 导入时必须验证 byteLength 与 SHA-256 contentHash。
+
 Atlas Packer 支持：
 - 每个动作独立图集。
 - 多个动作合并图集。
