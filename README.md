@@ -27,7 +27,7 @@
 | 检查 | 放大预览、重叠区域分析与清理预览 |
 | 精修 | 绿色保留笔刷 + 红色排除笔刷 + OpenCV GrabCut 智能收边，只作用于当前部件 |
 | 布局 | 层级 / 视差 / 锚点 / 深度 / Z 序 / 位置 / 缩放 / 旋转；锁定、隐藏、分组批量 |
-| Agent | 导出任务包（原图 + 任务 JSON + 提示词），导入 `sprite-agent-result/v1` 回写名称与属性 |
+| Agent | 导出任务包（原图 + 任务 JSON + 提示词），导入 `spatial-scene-agent-result/v2`（兼容旧版 `sprite-agent-result/v1`）回写名称与属性 |
 | 导出 | 独立透明 PNG、逐张下载、`manifest.json`、ZIP（PNG + 布局数据） |
 
 ## 快速开始
@@ -81,7 +81,7 @@
 ```text
 V9 导出 Agent 任务包（source.png + agent_task.json + AGENT_PROMPT.txt）
         ↓
-Agent 按 bbox 识别部件，输出 sprite-agent-result/v1 JSON
+Agent 按 bbox 识别部件，输出 spatial-scene-agent-result/v2 JSON（旧版 v1 仍可导入）
         ↓
 V9 导入标注，回写名称 / 分类 / 描述 / tags / 层级与布局建议
         ↓
