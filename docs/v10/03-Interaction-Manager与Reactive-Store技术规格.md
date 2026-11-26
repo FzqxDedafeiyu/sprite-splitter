@@ -538,6 +538,13 @@ PlaybackState 由 Animation Playback Controller 独立管理；Interaction Manag
 - Mask 修改后保存、关闭、重新打开，Mask 像素与 contentVersion 保持一致。
 - Mask Command 的 undo / redo 精确恢复前后像素；失败事务不留下部分 Mask 资源。
 - 两个 Workspace / 标签页从相同 Project revision 开始写入时，第二个过期提交必须收到 conflict；不得覆盖第一个提交。
+- Create 使用 absent expectation；同一新 ID 已存在时拒绝创建；Create 的 undo / redo 使用 tombstone 水位，revision 不回退。
+- Sprite PNG / Mask 资源 revision 与 contentHash 不匹配时返回 resource conflict；旧字节不得被静默覆盖。
+- 仅无关 Project 字段变化的 CAS 冲突，在 read-set / write-set / resource expectation 全部未变且无全局约束依赖时自动 rebase 一次；其余 project-cas 冲突停止并重新确认。
+- target-entity 与 resource 冲突不得自动重试；Trim / Mask / Pivot 校准结果必须重新计算并 Preview。
+- 多子命令中任一实体 / 资源冲突时整个 CompositeCommand 回滚；不得部分提交。
+- 旧 History undo / redo 遇到任一冲突不得自动 rebase 或强制覆盖。
+- staging 崩溃遗留项超过 24 小时可清理；Project / History / 活跃任务引用中的资源不得 GC；History 淘汰后遵守 24 小时 GC 宽限期。
 - 目标 Entity revision 变化时 Command 被拒绝；无关 Entity revision 变化不应被误判为目标实体冲突，但 Project 持久化 CAS 仍须按全局 revision 处理并刷新后重试。
 - 外部更新目标实体后执行旧 History undo / redo，必须拒绝并显示冲突，不得覆盖外部值。
 - Mask / PNG 资源写入与 Project Manifest 引用提交原子一致；失败后旧资源仍可读取，新临时资源不会成为有效引用。
