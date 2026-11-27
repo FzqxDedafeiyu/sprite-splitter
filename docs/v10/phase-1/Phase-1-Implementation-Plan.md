@@ -2,9 +2,9 @@
 
 > 状态：规划基线（Planning Baseline）
 > 创建日期：2026-11-27
-> 规划分支：\`v10/phase-1-planning\`
-> 上游基线：\`v10/phase-0-baseline\`
-> 技术规范：\`docs/v10-technical-blueprint\` 三份 V1.5 Frozen Implementation Baseline
+> 规划分支：`v10/phase-1-planning`
+> 上游基线：`v10/phase-0-baseline`
+> 技术规范：`docs/v10-technical-blueprint` 三份 V1.5 Frozen Implementation Baseline
 > 本文用途：将冻结技术规格拆解为可执行、可验收、可回滚的工程任务；本文不替代或修改冻结规格。
 
 ---
@@ -40,15 +40,15 @@ Phase 1 的目标是建立 V10 模块化工程与核心架构基础，并在此�
 
 ### 2.1 必须遵守的冻结规格
 
-- \`docs/v10/01-总体架构与模块迁移方案.md\`
-- \`docs/v10/02-Animation-System-技术规格.md\`
-- \`docs/v10/03-Interaction-Manager与Reactive-Store技术规格.md\`
+- `docs/v10/01-总体架构与模块迁移方案.md`
+- `docs/v10/02-Animation-System-技术规格.md`
+- `docs/v10/03-Interaction-Manager与Reactive-Store技术规格.md`
 
 规划与实现前必须阅读三份完整规格，不得只依赖本文摘要。
 
 ### 2.2 Phase 0 输入
 
-Phase 0 的测试记录与素材位于 \`docs/v10/phase-0/\`。实施过程中应使用真实 V9 导出物回归，不得把测试素材生成结果当成真实 V9 导出行为。
+Phase 0 的测试记录与素材位于 `docs/v10/phase-0/`。实施过程中应使用真实 V9 导出物回归，不得把测试素材生成结果当成真实 V9 导出行为。
 
 重点回归输入：
 - A-001：基础单精灵边界与外扩。
@@ -63,10 +63,10 @@ Phase 0 已记录的选区放大后显示不清晰问题，应纳入视口缩放
 
 ### 2.3 分支与文件保护
 
-- Phase 1 规划分支从 \`v10/phase-0-baseline\` 创建。
+- Phase 1 规划分支从 `v10/phase-0-baseline` 创建。
 - 规划阶段仅增加 / 修改 Phase 1 规划文档。
 - 后续实现应从经确认的 Phase 1 规划基线创建独立实现分支。
-- \`main\`、V9 HTML 和冻结技术规格分支均不得被 Phase 1 实现直接写入。
+- `main`、V9 HTML 和冻结技术规格分支均不得被 Phase 1 实现直接写入。
 - 每个里程碑单独提交；不得将多个核心系统重写塞入一个提交。
 
 ---
