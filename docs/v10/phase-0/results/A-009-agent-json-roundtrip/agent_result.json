@@ -1,0 +1,915 @@
+{
+  "schema": "spatial-scene-agent-result/v2",
+  "source": {
+    "width": 1672,
+    "height": 941
+  },
+  "sprites": [
+    {
+      "sprite_id": "sprite_001",
+      "name": "中央浮岛",
+      "slug": "central_floating_island",
+      "category": "terrain",
+      "description": "画面正中最大的浮岛，顶部是带拱形洞口与石阶的岩壁，前缘垂下一条长瀑布。",
+      "tags": [
+        "浮岛",
+        "瀑布",
+        "远景"
+      ],
+      "anchor": {
+        "x": 866,
+        "y": 509
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.8,
+        "parallax": 0.4,
+        "zIndex": 7
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.92,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_002",
+      "name": "左侧远岛",
+      "slug": "far_left_floating_island",
+      "category": "terrain",
+      "description": "画面左上方的远景浮岛，顶面覆草并立着尖峰，下半部渐隐在云气里。",
+      "tags": [
+        "浮岛",
+        "远景",
+        "尖峰"
+      ],
+      "anchor": {
+        "x": 192,
+        "y": 390
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.86,
+        "parallax": 0.34,
+        "zIndex": 5
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_003",
+      "name": "右上云带",
+      "slug": "upper_right_cloud_bank",
+      "category": "background",
+      "description": "画面右上方横贯天空的层状云带，云边缘被裁成锯齿状。",
+      "tags": [
+        "云",
+        "天空",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1194,
+        "y": 117
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.94,
+        "parallax": 0.26,
+        "zIndex": 2
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_004"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_004",
+      "name": "右侧大云团",
+      "slug": "big_cumulus_right",
+      "category": "background",
+      "description": "画面右侧的大块积云，云顶明亮、底部转灰，是天空中最完整的一团云。",
+      "tags": [
+        "云",
+        "积云",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1476,
+        "y": 184
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.96,
+        "parallax": 0.22,
+        "zIndex": 1
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_003",
+          "sprite_007"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_005",
+      "name": "左上云片",
+      "slug": "upper_left_cloud_wisp",
+      "category": "background",
+      "description": "左上角的一片平云，压在左侧远岛的前上方。",
+      "tags": [
+        "云",
+        "远景"
+      ],
+      "anchor": {
+        "x": 394,
+        "y": 123
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.92,
+        "parallax": 0.28,
+        "zIndex": 3
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.88,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_006",
+      "name": "中上云絮",
+      "slug": "upper_center_cloud_wisp",
+      "category": "background",
+      "description": "中央浮岛顶部左侧的一小团云絮。",
+      "tags": [
+        "云",
+        "远景"
+      ],
+      "anchor": {
+        "x": 586,
+        "y": 135
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.9,
+        "parallax": 0.3,
+        "zIndex": 3
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.88,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_007",
+      "name": "右中云絮",
+      "slug": "mid_right_cloud_wisp",
+      "category": "background",
+      "description": "右上云带下方的一条薄云，横在中右部天空。",
+      "tags": [
+        "云",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1229,
+        "y": 174
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.9,
+        "parallax": 0.3,
+        "zIndex": 4
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_003",
+          "sprite_004"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.88,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_008",
+      "name": "左中云絮",
+      "slug": "mid_left_cloud_wisp",
+      "category": "background",
+      "description": "左侧远岛与中央浮岛之间的一条薄云。",
+      "tags": [
+        "云",
+        "远景"
+      ],
+      "anchor": {
+        "x": 506,
+        "y": 189
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.9,
+        "parallax": 0.3,
+        "zIndex": 4
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.88,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_009",
+      "name": "云面高光碎片",
+      "slug": "cloud_glint_fragment",
+      "category": "effect",
+      "description": "嵌在右侧大云团里的 9×9 小高光块，疑似云面反光留下的碎片刻余，归属与用途难以确认。",
+      "tags": [
+        "高光",
+        "碎片"
+      ],
+      "anchor": {
+        "x": 1482,
+        "y": 155
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.95,
+        "parallax": 0.23,
+        "zIndex": 5
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_004"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.45,
+      "reviewStatus": "needs_review"
+    },
+    {
+      "sprite_id": "sprite_010",
+      "name": "带尖峰浮岛",
+      "slug": "right_island_with_spire",
+      "category": "terrain",
+      "description": "右侧中段的一座浮岛，岛顶立着一根细长尖峰，顶面覆草，底部收成岩锥。",
+      "tags": [
+        "浮岛",
+        "尖峰",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1301,
+        "y": 398
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.78,
+        "parallax": 0.44,
+        "zIndex": 8
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_015"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.85,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_011",
+      "name": "带塔浮岛",
+      "slug": "right_island_with_tower",
+      "category": "terrain",
+      "description": "右侧靠边的一座浮岛，岛上立着一座细高的石塔，塔身开有拱窗。",
+      "tags": [
+        "浮岛",
+        "石塔",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1516,
+        "y": 378
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.79,
+        "parallax": 0.43,
+        "zIndex": 8
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.8,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_012",
+      "name": "小浮石",
+      "slug": "small_floating_islet",
+      "category": "terrain",
+      "description": "左侧远岛右下方的小块浮岩，呈水滴状下垂，顶部有一根短尖峰。",
+      "tags": [
+        "浮岩",
+        "远景"
+      ],
+      "anchor": {
+        "x": 418,
+        "y": 324
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.8,
+        "parallax": 0.42,
+        "zIndex": 7
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_002"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.8,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_013",
+      "name": "右缘小岛",
+      "slug": "right_edge_islet",
+      "category": "terrain",
+      "description": "靠近画面右缘的一小块远景浮岛顶面，只见到圆钝的岛顶与紫色描边。",
+      "tags": [
+        "浮岛",
+        "边缘",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1620,
+        "y": 293
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.84,
+        "parallax": 0.36,
+        "zIndex": 6
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.7,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_014",
+      "name": "紫晶浮岛",
+      "slug": "crystal_floating_island",
+      "category": "terrain",
+      "description": "岛顶长着一簇紫色晶体的中型浮岛，岩体向下收窄成锥形。",
+      "tags": [
+        "浮岛",
+        "紫晶",
+        "中景"
+      ],
+      "anchor": {
+        "x": 531,
+        "y": 440
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.68,
+        "parallax": 0.56,
+        "zIndex": 10
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.85,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_015",
+      "name": "神殿浮岛",
+      "slug": "shrine_island",
+      "category": "architecture",
+      "description": "中景右部的浮岛，岛上有一座带尖顶与拱门的石砌小神殿，四周是草坡。",
+      "tags": [
+        "神殿",
+        "浮岛",
+        "遗迹",
+        "中景"
+      ],
+      "anchor": {
+        "x": 1136,
+        "y": 638
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.64,
+        "parallax": 0.62,
+        "zIndex": 11
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_010",
+          "sprite_026"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.85,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_016",
+      "name": "遗迹上云絮",
+      "slug": "cloud_wisp_near_ruins",
+      "category": "background",
+      "description": "左侧远景浮岛底部前方的一团浅蓝云气，也可能是石台边缘的残块，难以确认。",
+      "tags": [
+        "云",
+        "待确认"
+      ],
+      "anchor": {
+        "x": 84,
+        "y": 396
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.88,
+        "parallax": 0.32,
+        "zIndex": 4
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_002"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.58,
+      "reviewStatus": "needs_review"
+    },
+    {
+      "sprite_id": "sprite_017",
+      "name": "紫晶簇",
+      "slug": "glowing_crystal_cluster",
+      "category": "prop",
+      "description": "悬在中景右侧的紫色发光晶簇，菌盖状晶冠下有光柱向下延伸。",
+      "tags": [
+        "水晶",
+        "发光",
+        "装饰"
+      ],
+      "anchor": {
+        "x": 1424,
+        "y": 497
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.58,
+        "parallax": 0.66,
+        "zIndex": 12
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_026"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.8,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_018",
+      "name": "尖峰小浮岛",
+      "slug": "mid_islet_with_spire",
+      "category": "terrain",
+      "description": "中央浮岛前下方的小浮岛，岛心立着一根尖峰，底部有一汪浅色水潭。",
+      "tags": [
+        "浮岛",
+        "尖峰",
+        "远景"
+      ],
+      "anchor": {
+        "x": 646,
+        "y": 531
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.76,
+        "parallax": 0.46,
+        "zIndex": 9
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_001"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.75,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_019",
+      "name": "右缘尖峰浮岛",
+      "slug": "right_edge_islet_with_spire",
+      "category": "terrain",
+      "description": "画面右侧边缘的浮岛，岛顶有尖峰，整体比中景更暗更灰。",
+      "tags": [
+        "浮岛",
+        "尖峰",
+        "远景"
+      ],
+      "anchor": {
+        "x": 1618,
+        "y": 485
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.76,
+        "parallax": 0.46,
+        "zIndex": 9
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.75,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_020",
+      "name": "石拱门遗迹",
+      "slug": "stone_archway_ruins",
+      "category": "architecture",
+      "description": "画面左侧的石砌拱门遗迹：两根立柱夹着中央拱券，拱心嵌一枚蓝色宝石，周围有台阶、栏杆与残墙。",
+      "tags": [
+        "拱门",
+        "遗迹",
+        "石砌",
+        "近景"
+      ],
+      "anchor": {
+        "x": 235,
+        "y": 807
+      },
+      "layout": {
+        "layer": "foreground",
+        "depth": 0.3,
+        "parallax": 0.88,
+        "zIndex": 21
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_024"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.92,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_021",
+      "name": "紫晶柱",
+      "slug": "glowing_crystal_shard",
+      "category": "prop",
+      "description": "右侧靠近草甸平台的紫色发光晶体，晶冠明亮、下方拖着光晕。",
+      "tags": [
+        "水晶",
+        "发光",
+        "装饰"
+      ],
+      "anchor": {
+        "x": 1532,
+        "y": 584
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.54,
+        "parallax": 0.7,
+        "zIndex": 13
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_026"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.8,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_022",
+      "name": "瀑布水光碎片",
+      "slug": "waterfall_glint_fragment",
+      "category": "effect",
+      "description": "位于中央浮岛瀑布下段的 9×13 小水光块，疑为瀑布高光被切出的碎片刻余。",
+      "tags": [
+        "水光",
+        "碎片",
+        "瀑布"
+      ],
+      "anchor": {
+        "x": 883,
+        "y": 496
+      },
+      "layout": {
+        "layer": "background",
+        "depth": 0.8,
+        "parallax": 0.4,
+        "zIndex": 8
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [
+          "sprite_001"
+        ],
+        "supports": []
+      },
+      "confidence": 0.4,
+      "reviewStatus": "needs_review"
+    },
+    {
+      "sprite_id": "sprite_023",
+      "name": "空中光斑碎片",
+      "slug": "light_glint_fragment",
+      "category": "effect",
+      "description": "右侧平台树冠上方悬着的一小块浅蓝亮块，归属不明，疑为高光或云屑残留。",
+      "tags": [
+        "光斑",
+        "碎片"
+      ],
+      "anchor": {
+        "x": 1426,
+        "y": 503
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.6,
+        "parallax": 0.65,
+        "zIndex": 18
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.35,
+      "reviewStatus": "needs_review"
+    },
+    {
+      "sprite_id": "sprite_024",
+      "name": "左中草台",
+      "slug": "left_grass_terrace",
+      "category": "terrain",
+      "description": "中景左侧的草台，顶面覆草并长着一株圆冠小树，前面是石砌挡墙。",
+      "tags": [
+        "草台",
+        "平台",
+        "中景"
+      ],
+      "anchor": {
+        "x": 546,
+        "y": 737
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.5,
+        "parallax": 0.74,
+        "zIndex": 16
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_020",
+          "sprite_025",
+          "sprite_029"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.85,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_025",
+      "name": "中央草甸平台",
+      "slug": "central_grass_platform",
+      "category": "terrain",
+      "description": "画面中央的大平台，顶面是草坪与成排圆冠树，下方为石砌崖体。",
+      "tags": [
+        "平台",
+        "草坪",
+        "中景"
+      ],
+      "anchor": {
+        "x": 847,
+        "y": 807
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.48,
+        "parallax": 0.76,
+        "zIndex": 15
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_024",
+          "sprite_026"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_026",
+      "name": "右侧草甸平台",
+      "slug": "right_grass_platform",
+      "category": "terrain",
+      "description": "右侧的草甸平台，顶面覆草并有树丛，崖体上石块层理清晰。",
+      "tags": [
+        "平台",
+        "草坪",
+        "中景"
+      ],
+      "anchor": {
+        "x": 1383,
+        "y": 760
+      },
+      "layout": {
+        "layer": "midground",
+        "depth": 0.5,
+        "parallax": 0.74,
+        "zIndex": 16
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_025",
+          "sprite_015",
+          "sprite_021"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_027",
+      "name": "粉色珊瑚丛",
+      "slug": "pink_coral_bush",
+      "category": "vegetation",
+      "description": "右下前景的粉色珊瑚状灌木，成簇长在石缝上。",
+      "tags": [
+        "珊瑚",
+        "灌木",
+        "前景"
+      ],
+      "anchor": {
+        "x": 1620,
+        "y": 742
+      },
+      "layout": {
+        "layer": "foreground",
+        "depth": 0.08,
+        "parallax": 1.12,
+        "zIndex": 25
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.7,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_028",
+      "name": "前景地面带",
+      "slug": "foreground_ground_strip",
+      "category": "terrain",
+      "description": "贯通画面底部的前景地面：草地、石堆、珊瑚状灌木与小路，是最贴近镜头的一层地表。",
+      "tags": [
+        "地面",
+        "前景",
+        "草地"
+      ],
+      "anchor": {
+        "x": 838,
+        "y": 940
+      },
+      "layout": {
+        "layer": "foreground",
+        "depth": 0.12,
+        "parallax": 1.08,
+        "zIndex": 22
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.9,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_029",
+      "name": "前景石堆",
+      "slug": "foreground_boulder_pile",
+      "category": "terrain",
+      "description": "前景左中的一堆覆草圆石与方形石块，压在草台脚下。",
+      "tags": [
+        "石头",
+        "前景",
+        "装饰"
+      ],
+      "anchor": {
+        "x": 449,
+        "y": 798
+      },
+      "layout": {
+        "layer": "foreground",
+        "depth": 0.09,
+        "parallax": 1.1,
+        "zIndex": 25
+      },
+      "relations": {
+        "nearTo": [
+          "sprite_024"
+        ],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.8,
+      "reviewStatus": "ok"
+    },
+    {
+      "sprite_id": "sprite_030",
+      "name": "右缘珊瑚残片",
+      "slug": "edge_coral_fragment",
+      "category": "vegetation",
+      "description": "画面右下缘被裁切的一小条粉紫色植物残片，完整形态不可见。",
+      "tags": [
+        "珊瑚",
+        "边缘",
+        "残片"
+      ],
+      "anchor": {
+        "x": 1658,
+        "y": 835
+      },
+      "layout": {
+        "layer": "foreground",
+        "depth": 0.06,
+        "parallax": 1.15,
+        "zIndex": 26
+      },
+      "relations": {
+        "nearTo": [],
+        "attachedTo": [],
+        "supports": []
+      },
+      "confidence": 0.55,
+      "reviewStatus": "needs_review"
+    }
+  ]
+}

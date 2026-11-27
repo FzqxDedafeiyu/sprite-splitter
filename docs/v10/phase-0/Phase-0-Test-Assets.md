@@ -16,8 +16,8 @@
 | A-006 | 需要手工补充选区的素材 | 自动识别会漏掉或合并部分目标，并提供目标区域说明 | 自动识别后手工新增/拆分选区 | 已提供（见 assets/） |
 | A-007 | 动画帧序列素材 | 同一角色/物体至少 4 帧，命名和顺序明确 | 仅用于未来动画迁移验证；V9 不定义动画帧序列 | 已提供（见 assets/） |
 | A-008 | 场景多层素材 | 至少远景/中景/近景多个元素，提供预期层级和视差关系 | Scene Layout、层级、Z、视差、场景位置 | 已提供（见 assets/） |
-| A-009 | Agent JSON 样本 | V2 `spatial-scene-agent-result/v2`；最好另附 V1 兼容样本 | 导入、ID 对应、名称/属性回写、兼容性 | 待用户提供 |
-| A-010 | V9 导出的 ZIP / Manifest | 由当前 V9 基线实际导出，含 sprites/*.png 与 manifest.json | ZIP 解压、UTF-8 文件名、Manifest schema、PNG 对应关系 | 待用户提供 |
+| A-009 | Agent JSON 样本 | V2 `spatial-scene-agent-result/v2`；最好另附 V1 兼容样本 | 导入、ID 对应、名称/属性回写、兼容性 | 已提供（见 results/） |
+| A-010 | V9 导出的 ZIP / Manifest | 由当前 V9 基线实际导出，含 sprites/*.png 与 manifest.json | ZIP 解压、UTF-8 文件名、Manifest schema、PNG 对应关系 | 已提供（见 results/） |
 
 
 ## 已入库素材包（2026-11-26）
@@ -32,7 +32,7 @@
 - **A-003 的真实 Alpha 验收只能用 Set A**（Set B 的背景是深色渐变，不是真透明）。
 - Set A 的 **A-002 / A-006 使用人工提供的 1536×1024 素材表**（A-002 用整张，A-006 裁出四块分区牌区域）；**A-008 已由人工替换**为 1672×941 的分层场景图。Set B 对应项仍是早期概念图裁切。
 
-A-009（Agent JSON）与 A-010（V9 导出 ZIP）仍在等待提供，不能由生图模型产出。
+A-009（Agent JSON）与 A-010（V9 导出 ZIP）已入库到 [results/](results/README.md)；这两项由实际流程产出，不能由生图模型生成。
 
 
 ## 素材交付建议

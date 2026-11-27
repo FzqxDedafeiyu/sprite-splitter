@@ -1,0 +1,613 @@
+{
+  "schema": "spatial-scene-agent-task/v2",
+  "instructions": "你是 2D 游戏场景素材的空间标注 Agent。请根据 source.png 和候选框，为每个 sprite_id 标注语义与空间布局。\n\n必须遵守：\n1. sprite_id 是唯一关联键；不得新增、删除或合并候选素材。\n2. 严禁修改 bbox/sourceRect 的 x、y、width、height；这些是编辑器给出的原图像素坐标，必须原样保留。\n3. anchor 使用 source.png 的全局像素坐标（不是素材局部坐标）；默认建议落在物体底部中心、平台接触面或合适的场景支点。无法判断时用 bbox 底边中心。\n4. layer 只能是 background（远景）、midground（中景）、foreground（近景）。按视觉深度判断，不要仅按画面上下位置判断。\n5. depth 范围 0..1：远景通常较大（约 0.75-1.0），中景约 0.4-0.75，近景约 0-0.4。它表达空间深度，不是屏幕 Y 坐标。\n6. parallax 范围 0..2：远景通常 0.2-0.5，中景 0.55-0.8，近景 0.85-1.2。只给建议值，用户可在编辑器中调整。\n7. zIndex 是绘制顺序整数：远景通常 0-9，中景 10-19，近景 20-29；若实际遮挡关系需要，可在相邻范围内调整。数值越大越靠前。\n8. relations 只填写有把握的关系，数组元素必须使用其他候选的 sprite_id。nearTo 表示空间邻近，attachedTo 表示附着，supports 表示承托/可站立支撑。不要凭空编造关系。\n9. 不确定的字段不要猜测，使用 null、空数组，并将 reviewStatus 标记为 needs_review；confidence 为 0..1。\n10. name 用简洁中文名称；slug 用英文 snake_case；category 从 character, creature, prop, architecture, background, terrain, vegetation, effect, UI, other 中选择。\n\n只返回合法 JSON，不要 Markdown、解释或代码围栏。严格使用以下结构：\n{\n  \"schema\": \"spatial-scene-agent-result/v2\",\n  \"source\": {\"width\": 0, \"height\": 0},\n  \"sprites\": [{\n    \"sprite_id\": \"sprite_001\",\n    \"name\": \"中央浮岛\",\n    \"slug\": \"central_floating_island\",\n    \"category\": \"terrain\",\n    \"description\": \"...\",\n    \"tags\": [\"浮岛\", \"瀑布\"],\n    \"anchor\": {\"x\": 0, \"y\": 0},\n    \"layout\": {\"layer\": \"midground\", \"depth\": 0.6, \"parallax\": 0.7, \"zIndex\": 10},\n    \"relations\": {\"nearTo\": [], \"attachedTo\": [], \"supports\": []},\n    \"confidence\": 0.9,\n    \"reviewStatus\": \"ok\"\n  }]\n}\n",
+  "source": {
+    "filename": "A-008_scene_layers_rgb",
+    "width": 1672,
+    "height": 941,
+    "coordinateOrigin": "top-left",
+    "coordinateUnits": "source-pixels"
+  },
+  "sprites": [
+    {
+      "sprite_id": "sprite_001",
+      "name": "sprite_001",
+      "bbox": {
+        "x": 555,
+        "y": 14,
+        "width": 622,
+        "height": 496
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_002",
+      "name": "sprite_002",
+      "bbox": {
+        "x": 35,
+        "y": 17,
+        "width": 316,
+        "height": 374
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_003",
+      "name": "sprite_003",
+      "bbox": {
+        "x": 1083,
+        "y": 42,
+        "width": 223,
+        "height": 76
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_004",
+      "name": "sprite_004",
+      "bbox": {
+        "x": 1299,
+        "y": 58,
+        "width": 355,
+        "height": 127
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_005",
+      "name": "sprite_005",
+      "bbox": {
+        "x": 314,
+        "y": 64,
+        "width": 162,
+        "height": 60
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_006",
+      "name": "sprite_006",
+      "bbox": {
+        "x": 537,
+        "y": 83,
+        "width": 100,
+        "height": 53
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_007",
+      "name": "sprite_007",
+      "bbox": {
+        "x": 1154,
+        "y": 129,
+        "width": 151,
+        "height": 46
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_008",
+      "name": "sprite_008",
+      "bbox": {
+        "x": 440,
+        "y": 143,
+        "width": 133,
+        "height": 47
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_009",
+      "name": "sprite_009",
+      "bbox": {
+        "x": 1478,
+        "y": 147,
+        "width": 9,
+        "height": 9
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_010",
+      "name": "sprite_010",
+      "bbox": {
+        "x": 1203,
+        "y": 203,
+        "width": 197,
+        "height": 196
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_011",
+      "name": "sprite_011",
+      "bbox": {
+        "x": 1443,
+        "y": 209,
+        "width": 148,
+        "height": 170
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_012",
+      "name": "sprite_012",
+      "bbox": {
+        "x": 375,
+        "y": 220,
+        "width": 87,
+        "height": 105
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_013",
+      "name": "sprite_013",
+      "bbox": {
+        "x": 1589,
+        "y": 230,
+        "width": 63,
+        "height": 64
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_014",
+      "name": "sprite_014",
+      "bbox": {
+        "x": 469,
+        "y": 289,
+        "width": 125,
+        "height": 152
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_015",
+      "name": "sprite_015",
+      "bbox": {
+        "x": 960,
+        "y": 342,
+        "width": 353,
+        "height": 297
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_016",
+      "name": "sprite_016",
+      "bbox": {
+        "x": 39,
+        "y": 351,
+        "width": 92,
+        "height": 46
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_017",
+      "name": "sprite_017",
+      "bbox": {
+        "x": 1382,
+        "y": 363,
+        "width": 86,
+        "height": 135
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_018",
+      "name": "sprite_018",
+      "bbox": {
+        "x": 569,
+        "y": 364,
+        "width": 155,
+        "height": 168
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_019",
+      "name": "sprite_019",
+      "bbox": {
+        "x": 1574,
+        "y": 367,
+        "width": 88,
+        "height": 119
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_020",
+      "name": "sprite_020",
+      "bbox": {
+        "x": 10,
+        "y": 368,
+        "width": 451,
+        "height": 440
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_021",
+      "name": "sprite_021",
+      "bbox": {
+        "x": 1492,
+        "y": 459,
+        "width": 80,
+        "height": 126
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_022",
+      "name": "sprite_022",
+      "bbox": {
+        "x": 879,
+        "y": 484,
+        "width": 9,
+        "height": 13
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_023",
+      "name": "sprite_023",
+      "bbox": {
+        "x": 1421,
+        "y": 491,
+        "width": 12,
+        "height": 13
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_024",
+      "name": "sprite_024",
+      "bbox": {
+        "x": 452,
+        "y": 504,
+        "width": 189,
+        "height": 234
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_025",
+      "name": "sprite_025",
+      "bbox": {
+        "x": 635,
+        "y": 510,
+        "width": 425,
+        "height": 298
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_026",
+      "name": "sprite_026",
+      "bbox": {
+        "x": 1237,
+        "y": 527,
+        "width": 293,
+        "height": 234
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_027",
+      "name": "sprite_027",
+      "bbox": {
+        "x": 1572,
+        "y": 603,
+        "width": 98,
+        "height": 140
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_028",
+      "name": "sprite_028",
+      "bbox": {
+        "x": 7,
+        "y": 661,
+        "width": 1662,
+        "height": 280
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_029",
+      "name": "sprite_029",
+      "bbox": {
+        "x": 355,
+        "y": 684,
+        "width": 189,
+        "height": 115
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    },
+    {
+      "sprite_id": "sprite_030",
+      "name": "sprite_030",
+      "bbox": {
+        "x": 1651,
+        "y": 809,
+        "width": 15,
+        "height": 27
+      },
+      "category": "",
+      "description": "",
+      "currentLayout": {
+        "layer": "midground",
+        "depth": null,
+        "parallax": null,
+        "zIndex": null,
+        "anchor": null
+      },
+      "mask_available": true
+    }
+  ]
+}
