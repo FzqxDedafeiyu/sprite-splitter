@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>P1-0 offline browser probe</title>
+<pre id="result">pending</pre>
+<script>
+const request = (entry) => new Promise((resolve, reject) => {
+  entry.onsuccess = () => resolve(entry.result);
+  entry.onerror = () => reject(entry.error);
+});
+const completion = (tx) => new Promise((resolve, reject) => {
+  tx.oncomplete = resolve;
+  tx.onabort = () => reject(tx.error ?? new Error('aborted'));
+});
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+async function storage() {
+  const open = indexedDB.open('sprite-p1-offline-test', 1);
+  open.onupgradeneeded = () => {
+    open.result.createObjectStore('project');
+    open.result.createObjectStore('raster');
+  };
+  const db = await request(open);
+  try {
+    const commit = (expected, value, abort = false) => {
+      const tx = db.transaction(['project', 'raster'], 'readwrite');
+      const promise = completion(tx);
+      const project = tx.objectStore('project');
+      const read = project.get('revision');
+      read.onsuccess = () => {
+        if ((read.result ?? 0) !== expected) { tx.abort(); return; }
+        project.put(expected + 1, 'revision');
+        tx.objectStore('raster').put(new Uint8Array([value]), 'pixels');
+        if (abort) tx.abort();
+      };
+      return promise;
+    };
+    const race = await Promise.allSettled([commit(0, 7), commit(0, 9)]);
+    assert(race.filter(x => x.status === 'fulfilled').length === 1, 'CAS race');
+    await commit(1, 99, true).then(() => { throw new Error('abort committed'); }, () => {});
+    const tx = db.transaction(['project', 'raster'], 'readonly');
+    const [rev, bytes] = await Promise.all([
+      request(tx.objectStore('project').get('revision')),
+      request(tx.objectStore('raster').get('pixels'))
+    ]);
+    const winner = race[0].status === 'fulfilled' ? 7 : 9;
+    assert(rev === 1 && bytes[0] === winner, 'rollback mismatch');
+    return { revision: rev, bytes: bytes[0], rejectedWriters: 1 };
+  } finally { db.close(); }
+}
+async function worker() {
+  const url = URL.createObjectURL(new Blob([
+    'onmessage = ({data}) => { if (data === "hang") return; postMessage(data * 2); };'
+  ], { type: 'text/javascript' }));
+  const instance = new Worker(url);
+  try {
+    const result = await new Promise((resolve, reject) => {
+      instance.onmessage = (event) => resolve(event.data);
+      instance.onerror = reject;
+      instance.postMessage(21);
+    });
+    assert(result === 42, 'worker roundtrip');
+    instance.postMessage('hang');
+    instance.terminate();
+    return { roundtrip: result, terminateCalled: true };
+  } finally { instance.terminate(); URL.revokeObjectURL(url); }
+}
+async function canvasPng() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 320;
+  canvas.height = 240;
+  canvas.style.cssText = 'width:160px;height:120px;margin-left:17px;display:block';
+  document.body.append(canvas);
+  const ctx = canvas.getContext('2d');
+  const viewport = new DOMMatrix([3, 0, 0, 3, 36, 24]);
+  ctx.setTransform(viewport);
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(4, 5, 4, 4);
+  const bounds = canvas.getBoundingClientRect();
+  const device = new DOMPoint(6, 7).matrixTransform(viewport);
+  const client = { x: bounds.left + device.x * bounds.width / canvas.width,
+    y: bounds.top + device.y * bounds.height / canvas.height };
+  const canvasPoint = new DOMPoint((client.x - bounds.left) * canvas.width / bounds.width,
+    (client.y - bounds.top) * canvas.height / bounds.height);
+  const hit = canvasPoint.matrixTransform(viewport.inverse());
+  assert(hit.x === 6 && hit.y === 7, 'CSS canvas hit mapping');
+  const image = await createImageBitmap(await new Promise(resolve => canvas.toBlob(resolve, 'image/png')));
+  try {
+    assert(image.width === 320 && image.height === 240, 'PNG dimensions');
+    ctx.resetTransform();
+    ctx.clearRect(0, 0, 320, 240);
+    ctx.drawImage(image, 0, 0);
+    const rgba = Array.from(ctx.getImageData(device.x, device.y, 1, 1).data);
+    assert(rgba.join() === '255,0,0,255', 'PNG roundtrip pixel');
+    return { hit: [hit.x, hit.y], backing: [image.width, image.height], rgba };
+  } finally { image.close(); canvas.remove(); }
+}
+(async () => {
+  const results = {};
+  for (const [name, check] of Object.entries({ storage, worker, canvasPng })) {
+    document.querySelector('#result').textContent = 'running ' + name;
+    try {
+      results[name] = await Promise.race([
+        check(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+      ]);
+    }
+    catch (error) { results[name] = { error: String(error) }; }
+  }
+  document.querySelector('#result').textContent = JSON.stringify(results);
+})();
+</script>
