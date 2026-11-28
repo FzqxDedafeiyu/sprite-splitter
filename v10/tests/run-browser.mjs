@@ -1,0 +1,198 @@
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as pause } from 'node:timers/promises';
+
+const browserPath = process.env.V10_BROWSER;
+if (!browserPath) throw new Error('Set V10_BROWSER to a Chromium or Edge executable');
+const artifactDir = resolve(process.env.V10_BROWSER_ARTIFACTS ?? '.v10-browser-tests');
+const defaultPackage = new URL('../../docs/v10/phase-1/p1-0/spike/package.json', import.meta.url);
+const require = createRequire(process.env.V10_SPIKE_PACKAGE ?? defaultPackage);
+const { build } = require('esbuild');
+const fixture = new URL('./project-store.browser.ts', import.meta.url);
+const bundle = await build({ stdin: { sourcefile: 'cross-tab.ts', resolveDir: fileURLToPath(new URL('.', fixture)), contents: `
+  export { createProject } from '../src/project.ts';
+  export { ProjectStore } from '../src/project-store.ts';
+` }, bundle: true, write: false, format: 'esm' });
+const completeFixture = await build({ entryPoints: [fileURLToPath(fixture)],
+  bundle: true, write: false, format: 'esm' });
+const runtimeFixture = await build({
+  entryPoints: [fileURLToPath(new URL('./interaction.browser.ts', import.meta.url))],
+  bundle: true, write: false, format: 'esm'
+});
+const html = '<!doctype html><meta charset="utf-8"><pre id="result">pending</pre>';
+const server = createServer((request, response) => {
+  if (request.url === '/module.js' || request.url === '/fixture.js' || request.url === '/runtime.js') {
+    response.setHeader('content-type', 'text/javascript; charset=utf-8');
+    response.end((request.url === '/module.js' ? bundle : request.url === '/runtime.js' ? runtimeFixture : completeFixture).outputFiles[0].text);
+  } else {
+    response.setHeader('content-type', 'text/html; charset=utf-8');
+    response.end(html + (request.url === '/fixture' ? '<script type="module" src="/fixture.js"></script>' : request.url === '/runtime' ? '<script type="module" src="/runtime.js"></script>' : ''));
+  }
+});
+
+async function waitFor(read, label) {
+  const deadline = Date.now() + 10000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const value = await read();
+      if (value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await pause(100);
+  }
+  throw new Error('Timed out waiting for ' + label, { cause: lastError });
+}
+
+async function openTab(endpoint, url) {
+  const response = await fetch(endpoint + '/json/new?' + encodeURIComponent(url), { method: 'PUT' });
+  if (!response.ok) throw new Error('Cannot open browser tab: ' + response.status);
+  const target = await response.json();
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  const requests = new Map();
+  let nextId = 0;
+  ws.addEventListener('message', event => {
+    const message = JSON.parse(event.data);
+    const pending = requests.get(message.id);
+    if (!pending) return;
+    requests.delete(message.id);
+    if (message.error) pending.reject(new Error(message.error.message));
+    else pending.resolve(message.result);
+  });
+  ws.addEventListener('close', () => {
+    for (const { reject } of requests.values()) reject(new Error('Browser tab disconnected'));
+    requests.clear();
+  });
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', reject, { once: true });
+  });
+  function send(method, params = {}) {
+    const id = ++nextId;
+    return new Promise((resolve, reject) => {
+      requests.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+  return {
+    async evaluate(expression) {
+      const { result, exceptionDetails } = await send('Runtime.evaluate', {
+        expression, awaitPromise: true, returnByValue: true
+      });
+      if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
+      return result.value;
+    },
+    reload: () => send('Page.reload'),
+    mouse: params => send('Input.dispatchMouseEvent', params),
+    activate: () => send('Page.bringToFront'),
+    close: () => ws.close()
+  };
+}
+
+await mkdir(artifactDir, { recursive: true });
+const profile = await mkdtemp(join(artifactDir, 'profile-'));
+server.listen(0, '127.0.0.1');
+await once(server, 'listening');
+const url = 'http://127.0.0.1:' + server.address().port;
+const browser = spawn(browserPath, ['--headless=new', '--disable-gpu', '--no-first-run',
+  '--disable-extensions', '--disable-background-networking', '--disable-crash-reporter',
+  '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'],
+  { windowsHide: true, stdio: 'ignore' });
+let launchError;
+browser.on('error', error => { launchError = error; });
+const tabs = [];
+try {
+  const port = await waitFor(async () => {
+    if (launchError) throw launchError;
+    return (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)[0];
+  }, 'DevTools port');
+  const endpoint = 'http://127.0.0.1:' + port;
+  const fixtureTab = await openTab(endpoint, url + '/fixture');
+  tabs.push(fixtureTab);
+  const outcome = await waitFor(async () => {
+    const value = await fixtureTab.evaluate('document.querySelector("#result")?.textContent');
+    return value && value !== 'pending' ? JSON.parse(value) : undefined;
+  }, 'project store fixture');
+  if (outcome.test?.error) throw new Error(outcome.test.error);
+
+  const runtimeTab = await openTab(endpoint, url + '/runtime');
+  tabs.push(runtimeTab);
+  const runtime = await waitFor(async () => {
+    const value = await runtimeTab.evaluate('document.querySelector("#result")?.textContent');
+    return value && value !== 'pending' ? JSON.parse(value) : undefined;
+  }, 'interaction fixture');
+  if (runtime.test?.error) throw new Error(runtime.test.error);
+  await runtimeTab.activate();
+  await runtimeTab.evaluate('new Promise(resolve => requestAnimationFrame(() => resolve(true)))');
+  await runtimeTab.mouse({ type: 'mousePressed', x: 45, y: 145, button: 'left', buttons: 1, clickCount: 1 });
+  await runtimeTab.mouse({ type: 'mouseMoved', x: 250, y: 240, button: 'left', buttons: 1 });
+  await runtimeTab.mouse({ type: 'mouseReleased', x: 250, y: 240, button: 'left', buttons: 0, clickCount: 1 });
+  const native = await waitFor(async () => {
+    const state = JSON.parse(await runtimeTab.evaluate('document.querySelector("#native-result").textContent'));
+    return state.commandCount ? state : undefined;
+  }, 'native pointer completion');
+  if (!native.captured || native.commandCount !== 1 || !native.inactive) {
+    throw new Error('Native pointer capture or release failed: ' + JSON.stringify(native));
+  }
+
+  const first = await openTab(endpoint, url);
+  tabs.push(first);
+  const second = await openTab(endpoint, url);
+  tabs.push(second);
+  async function initialize(tab) {
+    await waitFor(() => tab.evaluate('location.origin === ' + JSON.stringify(url)), 'browser page');
+    await tab.evaluate(`(async () => {
+      globalThis.api = await import('/module.js');
+      globalThis.store = await api.ProjectStore.open('v10-cross-tab');
+    })()`);
+  }
+  await Promise.all([initialize(first), initialize(second)]);
+  const id = await first.evaluate(`(async () => {
+    const document = api.createProject();
+    await store.create(document);
+    return document.projectId;
+  })()`);
+  const quotedId = JSON.stringify(id);
+  for (const tab of [first, second]) {
+    await tab.evaluate(`(async () => {
+      globalThis.snapshot = (await store.load(${quotedId})).document;
+      if (snapshot.revision !== 1) throw new Error('Did not read original snapshot');
+    })()`);
+  }
+  const outcomes = await Promise.all([first, second].map((tab, index) => tab.evaluate(`(async () => {
+    const next = structuredClone(snapshot);
+    const key = 'projectSettings:' + next.projectId;
+    next.revision++;
+    next.projectSettings.revision++;
+    next.projectSettings.defaultFps = ${18 + index};
+    next.revisionLedger.entities[key]++;
+    try {
+      await store.commit(next, { projectRevision: 1, entities: { [key]: { state: 'present', revision: 1 } },
+        resources: {} });
+      return { saved: next.projectSettings.defaultFps };
+    } catch (error) { return { conflict: error.kind }; }
+  })()`)));
+  const saved = outcomes.filter(value => value.saved);
+  if (saved.length !== 1 || !outcomes.some(value => value.conflict === 'target-entity')) {
+    throw new Error('Cross-tab write did not reject a stale entity: ' + JSON.stringify(outcomes));
+  }
+  await second.reload();
+  await waitFor(() => second.evaluate('typeof globalThis.snapshot === "undefined"'), 'fresh page context');
+  await initialize(second);
+  const reopened = await second.evaluate(`(async () => {
+    const { document } = await store.load(${quotedId});
+    return [document.revision, document.projectSettings.defaultFps];
+  })()`);
+  if (reopened[0] !== 2 || reopened[1] !== saved[0].saved) throw new Error('Reload did not read the winning commit');
+  console.log(JSON.stringify({ fixture: outcome, runtime, native, twoTabs: 'one commit, one stale entity conflict', reloaded: reopened }));
+} finally {
+  for (const tab of tabs) tab.close();
+  browser.kill();
+  server.close();
+}

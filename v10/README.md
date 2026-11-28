@@ -16,3 +16,15 @@ TypeScript 严格检查通过。在 Edge 中运行真实 IndexedDB browser 测�
 ## 剩余边界
 
 当前模块还未接入编辑器或项目包导入导出。V9 迁移实现、跨标签页 UI、正式应用刷新恢复、Command / History、撤销重做时的 tombstone 恢复以及无引用资源回收仍待接入。当前存储拒绝普通 Create 重用 tombstone ID。SSM1 是本轮实现的 bitmap 线格式，RLE 仍待协议和解码支持。已知几何的 Mask 映射已可测试，未知几何的用户选择由后续命令和编辑器接入。
+
+## P1-2 交互基础与浏览器回归
+
+`coordinates.ts` 集中处理视口、DPR、旋转/缩放与命中，以及 Source Trim、Clip 校准和 Atlas Trim 的转换。绘制与命中共用矩阵。命中测试跳过隐藏、锁定及透明像素对象，Z 值相同使用绘制顺序，控制柄半径以 CSS 像素计。
+
+`interaction.ts` 是主指针与手势草稿的唯一拥有者，只发布手势类型和是否交互。成功释放指针时产生一个命令请求，取消、失焦、丢失 capture 与卸载均清理草稿。`workspace-lifecycle.ts` 在工作区切换、换工具、导入和自动识别时取消手势及旧异步任务。
+
+`reactive-store.ts` 将项目、UI、交互摘要和播放状态分别发布。组件使用只读视图和 selector。未变化的子对象保留引用，临时 UI 变化无需推进项目版本。
+
+使用 Node 24，在 P1-0 spike 目录执行一次 `npm ci`，设置 `V10_BROWSER` 为 Chromium 或 Edge 路径，然后从仓库根目录执行 `node v10/tests/run-browser.mjs`。可用 `V10_SPIKE_PACKAGE` 指向另一个装好依赖的 P1-0 package.json，用 `V10_BROWSER_ARTIFACTS` 把临时配置指到工作目录。运行器使用本机回环地址和全新浏览器配置。已在 Edge 验证原生 pointer capture、取消、订阅分区、两个真实标签页争用以及刷新回读。
+
+当前阶段提供运行时与自动化测试页面。生产工作区、各工具的具体 draft 命令以及多点闭合多边形仍需在编辑器接入时完成。
