@@ -1,3 +1,4 @@
+import { trimProjectHistory } from '../src/project-retention.ts';
 import { CommandBus } from '../src/command-bus.ts';
 import type { ProjectDocument, RasterRef } from '../src/domain.ts';
 import { createProject, safeAssetPath } from '../src/project.ts';
@@ -527,8 +528,43 @@ async function rasterCommandTests() {
     equal(unchanged.document.revision, persisted.document.revision);
     equal(unchanged.history?.segment, persisted.history?.segment);
     equal(unchanged.history?.undo.length, persisted.history?.undo.length);
-    return { persistedHistoryReopen: 'pass', isolatedHistoryTimeline: 'pass', historyAtomicity: 'pass', maskPresenceHistory: 'pass', maskTombstoneProtection: 'pass', cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
+    equal((await reopenedBus.dispatch(reopenedBus.prepareSpriteMaskRemoval(unchanged.document, id))).ok, true);
+    const removal = (await store.load(blank.projectId, bus.historyId))!;
+    const priorMaskRevision = removal.document.revisionLedger.resources[newAttachment.resourceId] - 1;
+    const day = 24 * 60 * 60 * 1000;
+    const immediateCount = await store.collectRetiredResources(blank.projectId);
+    equal(immediateCount, 0);
+    const cleaned = await store.collectRetiredResources(blank.projectId, Date.now() + day + 1000);
+    equal(cleaned > 0, true);
+    equal((await reopenedBus.undo(blank.projectId)).ok, true);
+    equal((await store.load(blank.projectId))?.document.assets[0].mask?.revision, priorMaskRevision + 2);
+    equal((await reopenedBus.redo(blank.projectId)).ok, true);
+    const secondRemoval = (await store.load(blank.projectId))!.document;
+    const afterExpiry = await store.collectRetiredResources(blank.projectId, Date.now() + 31 * day);
+    equal(afterExpiry > 0, true);
+    const collectedProject = (await store.load(blank.projectId, bus.historyId))!;
+    equal(collectedProject.document.revision, secondRemoval.revision);
+    equal(collectedProject.document.revisionLedger.resources[newAttachment.resourceId],
+      secondRemoval.revisionLedger.resources[newAttachment.resourceId]);
+    equal(collectedProject.history, undefined);
+    equal(collectedProject.bytes.has(pngId), true);
+    return { retiredResourceCollection: 'pass', retiredMaskPin: 'pass', persistedHistoryReopen: 'pass', isolatedHistoryTimeline: 'pass', historyAtomicity: 'pass', maskPresenceHistory: 'pass', maskTombstoneProtection: 'pass', cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
+}
+
+function historyBudgetTests() {
+  const now = Date.now();
+  const entry = (createdAt: number, bytes = 0) => ({ change: null, revision: 1, segment: 1, createdAt, bytes });
+  const a = { id: 'a', snapshot: { undo: Array.from({ length: 75 }, (_, i) => entry(now - 200 + i)), redo: [], segment: 1 } };
+  const b = { id: 'b', snapshot: { undo: Array.from({ length: 50 }, (_, i) => entry(now - 80 + i)), redo: [], segment: 1 } };
+  const result = trimProjectHistory([a, b], now);
+  equal([a.snapshot.undo.length, b.snapshot.undo.length, ...result.changed], [50, 50, 'a']);
+  const max = 1024 ** 3;
+  const first = { id: 'first', snapshot: { undo: [entry(now - 2, max)], redo: [], segment: 1 } };
+  const second = { id: 'second', snapshot: { undo: [entry(now - 1, 1)], redo: [], segment: 1 } };
+  trimProjectHistory([first, second], now);
+  equal([first.snapshot.undo.length, second.snapshot.undo.length], [0, 1]);
+  return 'pass';
 }
 
 async function historySchemaUpgrade() {
@@ -556,6 +592,6 @@ async function historySchemaUpgrade() {
 }
 
 Promise.all([run(), commandTests(), rasterCommandTests(), historySchemaUpgrade()]).then(([fixture, commands, rasterCommands, historyUpgrade]) => {
-  const value = { ...fixture, commands, rasterCommands, historyUpgrade };
+  const value = { ...fixture, commands, rasterCommands, historyUpgrade, projectHistoryBudget: historyBudgetTests() };
   document.querySelector('#result')!.textContent = JSON.stringify(value); },
   error => { document.querySelector('#result')!.textContent = JSON.stringify({ test: { error: String(error.stack ?? error) } }); });

@@ -48,7 +48,9 @@ export class SessionHistory<T> {
 
   #prune() {
     const cutoff = Date.now() - retention;
-    this.#undo = this.#undo.filter(entry => entry.createdAt > cutoff);
-    this.#redo = this.#redo.filter(entry => entry.createdAt > cutoff);
+    let lastExpired = -1;
+    for (const [index, entry] of this.#undo.entries()) if (entry.createdAt <= cutoff) lastExpired = index;
+    if (lastExpired >= 0) this.#undo.splice(0, lastExpired + 1);
+    if (this.#redo.some(entry => entry.createdAt <= cutoff)) this.#redo = [];
   }
 }

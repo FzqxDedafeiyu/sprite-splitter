@@ -1,3 +1,4 @@
+import { trimProjectHistory } from './project-retention.ts';
 import type { HistorySnapshot } from './session-history.ts';
 import type { ProjectDocument, ResourceVersion } from './domain.ts';
 import { entities, invariant, resources, sameValue, validateProject } from './project.ts';
@@ -18,7 +19,7 @@ export class ConflictError extends Error {
 }
 type HistoryWrite = { id: string; snapshot: HistorySnapshot<unknown> };
 type StagedInput = { resourceId: string; revision: number; bytes: Blob };
-type StoredResource = { version: ResourceVersion; bytes: Blob; raster?: Awaited<ReturnType<typeof inspectRaster>> };
+type StoredResource = { version: ResourceVersion; bytes: Blob; retiredAt?: number; raster?: Awaited<ReturnType<typeof inspectRaster>> };
 type Stage = { id: string; projectId: string; createdAt: number; records: StoredResource[] };
 const lifetime = 24 * 60 * 60 * 1000;
 
@@ -57,6 +58,10 @@ export async function resourceHash(bytes: Blob): Promise<string> {
 
 function resourceKey(projectId: string, version: ResourceVersion): IDBValidKey {
   return [projectId, version.resourceId, version.revision];
+}
+
+function projectRange(projectId: string): IDBKeyRange {
+  return IDBKeyRange.bound([projectId], [projectId, []]);
 }
 
 function checkExpectations(document: ProjectDocument, expected: CommitExpectation) {
@@ -261,8 +266,21 @@ export class ProjectStore {
               'Mask dimensions or encoding do not match sprite PNG: ' + sprite.id);
           }
         }
+        const liveVersions = resources(next);
+        const retiredAt = Date.now();
+        for (const { version } of resources(current).values()) {
+          if (liveVersions.get(version.resourceId)?.version.revision === version.revision) continue;
+          const key = resourceKey(next.projectId, version);
+          const retired = await result<StoredResource | undefined>(binary.get(key));
+          if (!retired) throw new ConflictError('resource', version.resourceId);
+          await result(binary.put({ ...retired, retiredAt }, key));
+        }
         await result(projects.put(next, next.projectId));
-        if (historyWrite) await result(tx.objectStore('history').put(historyWrite.snapshot, [next.projectId, historyWrite.id]));
+        if (historyWrite) {
+          const timelines = tx.objectStore('history');
+          await result(timelines.put(historyWrite.snapshot, [next.projectId, historyWrite.id]));
+          await this.#trimHistory(timelines, next.projectId, retiredAt);
+        }
         if (stageId) await result(staging.delete(stageId));
       });
     } catch (error) {
@@ -281,6 +299,49 @@ export class ProjectStore {
       const stage = await result<Stage | undefined>(staging.get(id));
       if (stage?.projectId === projectId) await result(staging.delete(id));
     });
+  }
+
+  async collectRetiredResources(projectId: string, now = Date.now()): Promise<number> {
+    const tx = this.database.transaction(['projects', 'resources', 'history'], 'readwrite');
+    return atomic(tx, async () => {
+      const current = await result<ProjectDocument | undefined>(tx.objectStore('projects').get(projectId));
+      if (!current) return 0;
+      validateProject(current);
+      const { pinnedMaskIds } = await this.#trimHistory(tx.objectStore('history'), projectId, now);
+      const live = resources(current);
+      const binary = tx.objectStore('resources');
+      const keys = await result(binary.getAllKeys(projectRange(projectId)));
+      let collected = 0;
+      for (const key of keys) {
+        const record = await result<StoredResource | undefined>(binary.get(key));
+        if (!record) continue;
+        const { resourceId, revision } = record.version;
+        const currentVersion = live.get(resourceId)?.version;
+        if (currentVersion?.revision === revision ||
+          (!currentVersion && pinnedMaskIds.has(resourceId) && current.revisionLedger.resources[resourceId] === revision + 1)) continue;
+        if (record.retiredAt === undefined) await result(binary.put({ ...record, retiredAt: now }, key));
+        else if (now - record.retiredAt >= lifetime) {
+          await result(binary.delete(key));
+          collected++;
+        }
+      }
+      return collected;
+    });
+  }
+
+  async #trimHistory(store: IDBObjectStore, projectId: string, now: number) {
+    const keys = await result<IDBValidKey[]>(store.getAllKeys(projectRange(projectId)));
+    const timelines = await Promise.all(keys.map(async key => ({
+      id: (key as [string, string])[1],
+      snapshot: await result<HistorySnapshot<unknown>>(store.get(key))
+    })));
+    const retention = trimProjectHistory(timelines, now);
+    for (const { id, snapshot } of timelines) {
+      if (!retention.changed.has(id)) continue;
+      if (snapshot.undo.length || snapshot.redo.length) await result(store.put(snapshot, [projectId, id]));
+      else await result(store.delete([projectId, id]));
+    }
+    return retention;
   }
 
   async collectExpiredStages(now = Date.now()): Promise<number> {
