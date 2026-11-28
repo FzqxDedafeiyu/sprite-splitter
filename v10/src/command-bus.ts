@@ -1,6 +1,6 @@
 import { collectAgentAnnotations, type AgentAnnotationEdit } from './agent-annotation-command.ts';
 import { applySceneEdits, collectSceneEdits, sceneItemKey, sceneOrderEdits, type SceneEdits, type SceneItemEdit } from './scene-command.ts';
-import { applySpritePresence, newSpriteEdit, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
+import { applySpritePresence, newSpriteEdit, spritePresenceKeys, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
 import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
 import { applyRasterReplacement, findSprite, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
 import { SessionHistory, type HistoryDirection, type HistorySnapshot } from './session-history.ts';
@@ -207,7 +207,7 @@ export class CommandBus {
     const id = spritePresenceTarget(edit);
     const operation: Operation = {
       affectedIds: [id],
-      changes: { readEntities: [], writeEntities: [spriteKey(id)], resources: spritePresenceResources(snapshot, edit) },
+      changes: { readEntities: [], writeEntities: spritePresenceKeys(snapshot, edit), resources: spritePresenceResources(snapshot, edit) },
       rebase: 'never',
       apply: (document, bytes) => this.#applySpritePresence(document, bytes, edit)
     };
@@ -302,7 +302,8 @@ export class CommandBus {
       const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) :
         change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) :
         change.kind === 'sprite-presence' ? spritePresenceResources(document, change[direction]) : [];
-      const keys = affectedIds.map(change.kind === 'scene' ? sceneItemKey : spriteKey);
+      const keys = change.kind === 'sprite-presence' ? spritePresenceKeys(document, change[direction]) :
+        affectedIds.map(change.kind === 'scene' ? sceneItemKey : spriteKey);
       const checks = captureExpectations(document, { readEntities: [], writeEntities: keys,
         resources: resourceIds });
       let stageId: string | undefined;
@@ -322,6 +323,10 @@ export class CommandBus {
         if (edit.kind === 'attach' && edit.restore) {
           const key = spriteKey(change.spriteId);
           checks.entities[key] = { state: 'tombstone', revision: document.revisionLedger.entities[key] };
+          if (edit.scene) {
+            const itemKey = sceneItemKey(change.spriteId);
+            checks.entities[itemKey] = { state: 'tombstone', revision: document.revisionLedger.entities[itemKey] };
+          }
           for (const resourceId of resourceIds) {
             checks.resources[resourceId] = { state: 'tombstone', revision: document.revisionLedger.resources[resourceId] };
           }

@@ -104,7 +104,8 @@ function checkTransition(current: ProjectDocument, next: ProjectDocument, expect
       continue;
     }
     const restoration = expected.entities[key];
-    const restoring = key.startsWith('spriteAsset:') && !before && restoration?.state === 'tombstone';
+    const restoring = (key.startsWith('spriteAsset:') || key.startsWith('sceneItem:')) &&
+      !before && restoration?.state === 'tombstone';
     const revision = before ? before.revision + Number(changed) : restoring ? restoration.revision + 1 : 1;
     invariant((before || restoring || !Object.hasOwn(entityLedger, key)) && after.revision === revision,
       'Unexpected entity revision or reused ID: ' + key);

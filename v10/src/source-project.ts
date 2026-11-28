@@ -1,4 +1,5 @@
-import type { ProjectDocument, Rect, ResourceVersion, SceneLayout, SpriteAsset } from './domain.ts';
+import { defaultSourceSceneItem } from './scene-command.ts';
+import type { ProjectDocument, Rect, ResourceVersion, SpriteAsset } from './domain.ts';
 import { createProject, invariant, validateProject } from './project.ts';
 import type { ProjectDraft } from './project-draft.ts';
 import { resourceHash } from './project-store.ts';
@@ -58,16 +59,6 @@ export async function cropSourcePng(bitmap: ImageBitmap, rect: Rect, { mask, pre
   return canvas.convertToBlob({ type: 'image/png' });
 }
 
-export function defaultSourceSceneItem(spriteId: string, sourceRect: Rect, order: number): SceneLayout {
-  return {
-    spriteId, layer: 'midground', depth: 0.5, parallax: 0.7, zIndex: order,
-    visible: true, locked: false, position: { x: sourceRect.x, y: sourceRect.y },
-    transform: { scaleX: 1, scaleY: 1, rotation: 0 },
-    sceneAnchor: { x: Math.round(sourceRect.x + sourceRect.width / 2), y: sourceRect.y + sourceRect.height },
-    anchorSource: 'defaulted', relations: { nearTo: [], attachedTo: [], supports: [] }, revision: 1
-  };
-}
-
 export async function previewSourceProject(input: Blob, filename: string, settings: DetectionOptions): Promise<ProjectDraft & {
   detectionMode: 'alpha' | 'lightbg';
 }> {
@@ -107,7 +98,7 @@ export async function previewSourceProject(input: Blob, filename: string, settin
         rasterResource, contentVersion: 1, revision: 1 };
       project.assets.push(asset);
       project.revisionLedger.entities['spriteAsset:' + id] = 1;
-      project.sceneLayout.items[id] = defaultSourceSceneItem(id, sourceRect, index);
+      project.sceneLayout.items[id] = { ...defaultSourceSceneItem(id, sourceRect, index), revision: 1 };
       project.revisionLedger.entities['sceneItem:' + id] = 1;
     }
     validateProject(project);

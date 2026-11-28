@@ -3,11 +3,12 @@ import { InteractionManager } from '../src/interaction.ts';
 
 type SourceView = { key: string; bytes: Blob; width: number; height: number };
 
-export function bindCropEditor(apply: (rect: Rect) => void) {
+export function bindCropEditor(apply: (rect: Rect, create: boolean) => void) {
   const panel = document.querySelector<HTMLDetailsElement>('#source-crop')!;
   const surface = document.querySelector<HTMLElement>('#crop-surface')!;
   const image = document.querySelector<HTMLImageElement>('#crop-image')!;
   const fields = document.querySelector<HTMLFieldSetElement>('#crop-fields')!;
+  const applyButton = document.querySelector<HTMLButtonElement>('#crop-apply')!;
   const originalGuide = document.querySelector<HTMLElement>('#crop-original')!;
   const draftGuide = document.querySelector<HTMLElement>('#crop-draft')!;
   const [x, y, width, height] = ['x', 'y', 'w', 'h'].map(key => document.querySelector<HTMLInputElement>('#crop-' + key)!);
@@ -75,7 +76,8 @@ export function bindCropEditor(apply: (rect: Rect) => void) {
   document.querySelector('#crop-reset')!.addEventListener('click', () => show(original));
   document.querySelector('#crop-form')!.addEventListener('submit', event => {
     event.preventDefault();
-    if (enabled) apply(read());
+    const create = (event as SubmitEvent).submitter?.id === 'crop-create';
+    if (enabled && (create || original)) apply(read(), create);
   });
 
   return {
@@ -91,7 +93,8 @@ export function bindCropEditor(apply: (rect: Rect) => void) {
       }
       source = next;
       original = rect;
-      panel.hidden = !next || !rect;
+      panel.hidden = !next;
+      applyButton.disabled = !rect;
       draw(originalGuide, rect);
       show(rect);
     },

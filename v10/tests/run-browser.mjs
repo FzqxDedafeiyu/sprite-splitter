@@ -425,7 +425,36 @@ try {
     throw new Error('Source rerun overwrote the saved selection instead of opening a new draft');
   }
 
-  const workbench = { agentTaskRoundTrip: 'pass', sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  await app.evaluate('document.querySelector("#save").click()');
+  await waitFor(async () => (await appStatus())?.includes('已保存为 V10'), 'empty source project save');
+  await app.evaluate('(' + (() => {
+    for (const [id, value] of Object.entries({ x: 34, y: 5, w: 12, h: 12 })) {
+      document.querySelector('#crop-' + id).value = value;
+    }
+    const create = document.querySelector('#crop-create');
+    if (create.matches(':disabled')) throw new Error('Manual creation is missing on an empty source project');
+    document.querySelector('#crop-form').requestSubmit(create);
+  }).toString() + ')()');
+  await waitFor(async () => (await appStatus())?.includes('已新增素材'), 'create source sprite and scene item');
+  const manualId = await app.evaluate('document.querySelector("#sprites button[aria-current=true]").dataset.spriteId');
+  const manualScene = () => app.evaluate('["x","y","z"].map(id => document.querySelector("#scene-" + id).valueAsNumber)');
+  if (await countLabel() !== '1 个' || sourceIds.includes(manualId) || String(await manualScene()) !== '34,5,0' ||
+    !await app.evaluate('document.querySelector("#selection").textContent.includes("12 × 12 px")')) {
+    throw new Error('Manual creation failed to set new identity, crop or scene item');
+  }
+  await app.evaluate('document.querySelector("#undo").click()');
+  await waitFor(async () => (await appStatus()) === '已撤销。', 'undo creation and scene placement');
+  if (await countLabel() !== '0 个') throw new Error('Undo left a manually created sprite');
+  await app.evaluate('document.querySelector("#redo").click()');
+  await waitFor(async () => (await appStatus()) === '已重做。', 'redo creation and scene placement');
+  if (await countLabel() !== '1 个' || String(await manualScene()) !== '34,5,0' ||
+    await app.evaluate('document.querySelector("#sprites button").dataset.spriteId') !== manualId) {
+    throw new Error('Redo did not restore the source sprite and its scene item together');
+  }
+  await app.evaluate('document.querySelector("#export").click()');
+  await waitFor(async () => (await appStatus())?.includes('兼容 ZIP 已生成'), 'export manually created sprite');
+
+  const workbench = { agentTaskRoundTrip: 'pass', sourceManualCreation: 'pass', sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);

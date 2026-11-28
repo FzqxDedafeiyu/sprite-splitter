@@ -1,4 +1,5 @@
-import type { Point, ProjectDocument, Rect, ResourceVersion, SpriteAsset } from './domain.ts';
+import { defaultSourceSceneItem, sceneItemKey, sceneLayoutKey } from './scene-command.ts';
+import type { Point, ProjectDocument, Rect, ResourceVersion, SceneLayout, SpriteAsset } from './domain.ts';
 import { inspectRaster } from './mask.ts';
 import { invariant } from './project.ts';
 import type { ProjectStore } from './project-store.ts';
@@ -6,14 +7,15 @@ import { findSprite, verifyOwnership } from './raster-command.ts';
 
 export type NewSprite = {
   name: string; category: string; png: Blob; description?: string; sourceImageId?: string;
-  sourceRect?: Rect; polygon?: Point[];
+  sourceRect?: Rect; polygon?: Point[]; sceneOrder?: number;
 };
 type SpriteMetadata = Omit<SpriteAsset, 'revision' | 'contentVersion' | 'rasterResource' | 'mask'>;
+type NewSceneItem = Omit<SceneLayout, 'revision'>;
 type SpriteBinary = { resourceId: string; bytes: Blob };
 type SpriteMask = Omit<NonNullable<SpriteAsset['mask']>, keyof ResourceVersion> & SpriteBinary;
 export type SpritePresenceEdit =
-  | { kind: 'attach'; index: number; sprite: SpriteMetadata; raster: SpriteBinary; mask?: SpriteMask; restore?: true }
-  | { kind: 'remove'; spriteId: string };
+  | { kind: 'attach'; index: number; sprite: SpriteMetadata; raster: SpriteBinary; mask?: SpriteMask; scene?: NewSceneItem; restore?: true }
+  | { kind: 'remove'; spriteId: string; scene?: true };
 
 export function newSpriteEdit(input: NewSprite, index: number): SpritePresenceEdit {
   const id = crypto.randomUUID();
@@ -21,15 +23,21 @@ export function newSpriteEdit(input: NewSprite, index: number): SpritePresenceEd
   const metadata = { name: input.name, category: input.category, description: input.description, sourceImageId: input.sourceImageId };
   const sourceRect = input.sourceRect && { ...input.sourceRect };
   const points = input.polygon?.map(point => ({ ...point }));
+  let scene: NewSceneItem | undefined;
+  if (input.sceneOrder !== undefined) {
+    invariant(sourceRect && input.sourceImageId && Number.isSafeInteger(input.sceneOrder),
+      'A new scene item requires source geometry and valid layer order');
+    scene = defaultSourceSceneItem(id, sourceRect, input.sceneOrder);
+  }
   return {
-    kind: 'attach', index, raster: { resourceId, bytes: input.png },
+    kind: 'attach', index, scene, raster: { resourceId, bytes: input.png },
     sprite: { ...metadata, id, assetRef: 'sprites/' + resourceId + '.png', sourceRect,
       sourceRectStatus: sourceRect ? 'known' : 'unknown', shape: points ? 'polygon' : 'rectangle', points }
   };
 }
 
-function ensureUnreferenced(document: ProjectDocument, id: string) {
-  const referenced = Object.hasOwn(document.sceneLayout.items, id) ||
+function ensureUnreferenced(document: ProjectDocument, id: string, removeOwnScene: boolean) {
+  const referenced = (!removeOwnScene && Object.hasOwn(document.sceneLayout.items, id)) ||
     Object.values(document.sceneLayout.items).some(item => Object.values(item.relations).some(ids => ids.includes(id))) ||
     document.sceneGroups.some(group => group.memberSpriteIds.includes(id)) ||
     document.animationSets.some(set => set.spriteIds.includes(id)) ||
@@ -41,10 +49,23 @@ export function spritePresenceTarget(edit: SpritePresenceEdit): string {
   return edit.kind === 'attach' ? edit.sprite.id : edit.spriteId;
 }
 
+export function spritePresenceKeys(document: ProjectDocument, edit: SpritePresenceEdit) {
+  const id = spritePresenceTarget(edit);
+  const keys = ['spriteAsset:' + id];
+  if (edit.scene) keys.push(sceneItemKey(id), sceneLayoutKey(document.projectId));
+  return keys;
+}
+
+function advanceSceneLayout(document: ProjectDocument) {
+  const layout = document.sceneLayout;
+  layout.revision++;
+  document.revisionLedger.entities[sceneLayoutKey(document.projectId)] = layout.revision;
+}
+
 export function spritePresenceResources(document: ProjectDocument, edit: SpritePresenceEdit): string[] {
   if (edit.kind === 'attach') return edit.mask ? [edit.raster.resourceId, edit.mask.resourceId] : [edit.raster.resourceId];
   const sprite = findSprite(document, edit.spriteId);
-  ensureUnreferenced(document, edit.spriteId);
+  ensureUnreferenced(document, edit.spriteId, Boolean(edit.scene));
   const references = [sprite.rasterResource.resourceId];
   if (sprite.mask) references.push(sprite.mask.resourceId);
   for (const id of references) verifyOwnership(document, id);
@@ -68,6 +89,15 @@ export async function applySpritePresence(document: ProjectDocument, existing: R
     const index = document.assets.findIndex(asset => asset.id === id);
     const undo: SpritePresenceEdit = { kind: 'attach', index, sprite: metadata,
       raster: { resourceId: rasterResource.resourceId, bytes: png }, restore: true };
+    if (edit.scene) {
+      const scene = document.sceneLayout.items[id];
+      invariant(scene, 'The scene item to remove is missing');
+      const { revision: sceneRevision, ...properties } = scene;
+      undo.scene = properties;
+      delete document.sceneLayout.items[id];
+      ledger.entities[sceneItemKey(id)] = sceneRevision + 1;
+      advanceSceneLayout(document);
+    }
     if (mask && maskBytes) {
       const { resourceId, revision: _revision, contentHash: _hash, byteLength: _length, ...descriptor } = mask;
       undo.mask = { ...descriptor, resourceId, bytes: maskBytes };
@@ -105,6 +135,11 @@ export async function applySpritePresence(document: ProjectDocument, existing: R
     invariant(edit.sprite.points && edit.sprite.points.length >= 3 &&
       edit.sprite.points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y)), 'Invalid sprite polygon');
   }
+  const sceneWatermark = ledger.entities[sceneItemKey(id)];
+  if (edit.scene) {
+    invariant(edit.scene.spriteId === id && !Object.hasOwn(document.sceneLayout.items, id) &&
+      (edit.restore ? sceneWatermark >= 1 : sceneWatermark === undefined), 'Scene item identity cannot be reused');
+  }
   const staged = await store.stage(document.projectId, binaries.map(({ resourceId, bytes: blob }) => ({
     resourceId, revision: edit.restore ? ledger.resources[resourceId] + 1 : 1, bytes: blob
   })));
@@ -118,6 +153,12 @@ export async function applySpritePresence(document: ProjectDocument, existing: R
   document.assets.splice(edit.index, 0, sprite);
   ledger.entities[key] = revision;
   for (const version of staged.versions) ledger.resources[version.resourceId] = version.revision;
-  const undo: SpritePresenceEdit = { kind: 'remove', spriteId: id };
+  if (edit.scene) {
+    const sceneRevision = edit.restore ? sceneWatermark + 1 : 1;
+    document.sceneLayout.items[id] = { ...edit.scene, revision: sceneRevision };
+    ledger.entities[sceneItemKey(id)] = sceneRevision;
+    advanceSceneLayout(document);
+  }
+  const undo: SpritePresenceEdit = { kind: 'remove', spriteId: id, scene: edit.scene ? true : undefined };
   return { stageId: staged.id, undo, redo: { ...edit, restore: true as const }, bytes };
 }

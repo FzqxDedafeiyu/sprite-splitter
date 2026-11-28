@@ -1,4 +1,4 @@
-import type { ProjectDocument, SceneLayout } from './domain.ts';
+import type { ProjectDocument, Rect, SceneLayout } from './domain.ts';
 import { invariant, sameValue } from './project.ts';
 
 export type SceneItemPatch = Partial<Pick<SceneLayout, 'layer' | 'depth' | 'parallax' | 'zIndex' |
@@ -6,6 +6,18 @@ export type SceneItemPatch = Partial<Pick<SceneLayout, 'layer' | 'depth' | 'para
 export type SceneItemEdit = { spriteId: string; patch: SceneItemPatch };
 export type SceneEdits = Map<string, SceneItemPatch>;
 export const sceneItemKey = (id: string) => 'sceneItem:' + id;
+export const sceneLayoutKey = (projectId: string) => 'sceneLayout:' + projectId;
+
+export function defaultSourceSceneItem(spriteId: string, sourceRect: Rect, order: number): Omit<SceneLayout, 'revision'> {
+  return {
+    spriteId, layer: 'midground', depth: 0.5, parallax: 0.7, zIndex: order,
+    visible: true, locked: false, position: { x: sourceRect.x, y: sourceRect.y },
+    transform: { scaleX: 1, scaleY: 1, rotation: 0 },
+    sceneAnchor: { x: Math.round(sourceRect.x + sourceRect.width / 2), y: sourceRect.y + sourceRect.height },
+    anchorSource: 'defaulted', relations: { nearTo: [], attachedTo: [], supports: [] }
+  };
+}
+
 const fields = new Set(['layer', 'depth', 'parallax', 'zIndex', 'visible', 'locked', 'position',
   'transform', 'sceneAnchor', 'anchorSource']);
 

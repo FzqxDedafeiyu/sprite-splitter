@@ -75,45 +75,61 @@ function describeFailure(result: Extract<CommandResult, { ok: false }>) {
   return result.error.cause ?? result.error.message;
 }
 
-async function applyCommand(projectId: string, operation: () => Promise<CommandResult>, done: string) {
+async function applyCommand(projectId: string, operation: () => Promise<CommandResult>, done: string, selectAffected = false) {
   const result = await operation();
   if (!result.ok) {
     say(describeFailure(result), true);
     return;
   }
+  if (selectAffected) selectedId = result.affectedIds[0];
   try { await openSaved(projectId); }
   catch { say('修改已保存，但界面未能刷新。请选择「重新读取」。', true); return; }
   say(done);
 }
 
 function sourceFor(asset?: SpriteAsset) {
-  const source = opened?.document.sourceImages.find(item => item.id === asset?.sourceImageId);
+  const sources = opened?.document.sourceImages;
+  const source = asset?.sourceImageId ? sources?.find(item => item.id === asset.sourceImageId) :
+    sources?.length === 1 ? sources[0] : undefined;
   const version = source?.resourceVersion;
   const bytes = version && opened?.bytes.get(version.resourceId);
   if (!source || source.width === undefined || source.height === undefined || !version || !bytes) return undefined;
-  return { key: version.resourceId + '@' + version.contentHash, bytes, width: source.width, height: source.height };
+  return { id: source.id, key: version.resourceId + '@' + version.contentHash, bytes, width: source.width, height: source.height };
 }
 
-function applyCrop(rect: Rect) {
+function applyCrop(rect: Rect, create: boolean) {
   const current = opened;
   const asset = current?.document.assets.find(item => item.id === selectedId);
   const source = sourceFor(asset);
-  const original = asset?.sourceRect;
-  const previous = asset && current?.bytes.get(asset.rasterResource.resourceId);
-  if (pending || !current || !asset || !source || !original || !previous) return;
+  if (pending || !current || !source) return;
   if (![rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) ||
     rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 ||
     rect.x + rect.width > source.width || rect.y + rect.height > source.height) {
     say('裁切框必须在源图范围内，宽高至少为 1 像素。', true);
     return;
   }
-  if (sameValue(rect, original)) { say('裁切框没有变化。'); return; }
+  const original = asset?.sourceRect;
+  const previous = asset && current.bytes.get(asset.rasterResource.resourceId);
+  if (!create) {
+    if (!asset || !original || !previous) return;
+    if (sameValue(rect, original)) { say('裁切框没有变化。'); return; }
+  }
   void run('正在裁切素材…', async () => {
     const { bitmap } = await openSourceBitmap(source.bytes);
     try {
-      const png = await cropSourcePng(bitmap, rect, { preserve: { rect: original, bytes: previous } });
-      const command = bus.prepareSpriteCrop(current.document, asset.id, rect, png);
-      await applyCommand(current.document.projectId, () => bus.dispatch(command), '裁切框已保存。');
+      const project = current.document;
+      if (create) {
+        const png = await cropSourcePng(bitmap, rect);
+        const sceneOrder = Object.values(project.sceneLayout.items).reduce((top, item) => Math.max(top, item.zIndex), -1) + 1;
+        const name = 'sprite_' + String(project.assets.length + 1).padStart(3, '0');
+        const command = bus.prepareSpriteCreation(project, { name, category: 'uncategorized', png,
+          sourceImageId: source.id, sourceRect: rect, sceneOrder });
+        await applyCommand(project.projectId, () => bus.dispatch(command), '已新增素材。', true);
+      } else if (asset && original && previous) {
+        const png = await cropSourcePng(bitmap, rect, { preserve: { rect: original, bytes: previous } });
+        const command = bus.prepareSpriteCrop(project, asset.id, rect, png);
+        await applyCommand(project.projectId, () => bus.dispatch(command), '裁切框已保存。');
+      }
     } finally { bitmap.close(); }
   });
 }
@@ -157,7 +173,7 @@ function controls() {
   cancelAgent.disabled = !saved || !agentPending;
   undo.disabled = !saved || !historyAvailable('undo');
   redo.disabled = !saved || !historyAvailable('redo');
-  cropEditor.setEnabled(saved && Boolean(selectedId));
+  cropEditor.setEnabled(saved && Boolean(sourceFor(opened?.document.assets.find(item => item.id === selectedId))));
   element<HTMLFieldSetElement>('metadata-fields').disabled = !saved || !selectedId;
   element<HTMLFieldSetElement>('scene-fields').disabled = !saved || !selectedId ||
     !opened?.document.sceneLayout.items[selectedId];

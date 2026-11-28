@@ -45,7 +45,7 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 #agent-review ul{max-height:140px;overflow:auto;margin:.45rem 0;padding-inline-start:1.2rem}
 #agent-review ul:empty{display:none}
 #source-crop{margin:0 1rem 1rem;padding:.6rem .8rem;color:#c8d8ed}
-#crop-surface{position:relative;width:min(100%,var(--crop-width));margin:.65rem auto;cursor:crosshair;touch-action:none;user-select:none;background:repeating-conic-gradient(#303c4a 0% 25%,#1e2732 0% 50%) 50%/16px 16px}
+#crop-surface{position:relative;overflow:hidden;width:min(100%,var(--crop-width));margin:.65rem auto;cursor:crosshair;touch-action:none;user-select:none;background:repeating-conic-gradient(#303c4a 0% 25%,#1e2732 0% 50%) 50%/16px 16px}
 #crop-image{display:block;width:100%;height:auto;image-rendering:pixelated}
 .crop-guide{position:absolute;pointer-events:none;outline:2px solid #ffce80;background:#ffce8022}
 .crop-guide:first-of-type{outline:1px dashed #a1c8ff;background:transparent}
@@ -142,7 +142,7 @@ fieldset:disabled{opacity:.55}
 </form>
 </div>
 <details id="source-crop" class="panel" hidden>
-<summary>在源图上调整裁切框</summary>
+<summary>源图选区</summary>
 <div id="crop-surface">
 <img id="crop-image" alt="当前项目的原始图像" draggable="false">
 <div id="crop-original" class="crop-guide" hidden></div>
@@ -155,7 +155,11 @@ fieldset:disabled{opacity:.55}
 <label>Y<input id="crop-y" type="number" min="0" step="1" required></label>
 <label>宽<input id="crop-w" type="number" min="1" step="1" required></label>
 <label>高<input id="crop-h" type="number" min="1" step="1" required></label>
-<div class="actions"><button type="submit">保存裁切框</button><button id="crop-reset" type="button">重置选框</button></div>
+<div class="actions">
+<button id="crop-apply" type="submit">保存裁切框</button>
+<button id="crop-create" type="submit">新增为素材</button>
+<button id="crop-reset" type="button">重置选框</button>
+</div>
 </fieldset>
 </form>
 </details>
