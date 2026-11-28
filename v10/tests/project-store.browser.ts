@@ -257,7 +257,39 @@ async function commandTests() {
     const final = (await persistence.load(project.projectId))!.document;
     equal(final.assets.map(asset => asset.name), ['另一标签页', '中文名 B']);
     equal(final.revision, staleBase.revision + 1);
-    return { publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
+    const beforeRetry = (await persistence.load(project.projectId))!.document;
+    const fresh = structuredClone(beforeRetry);
+    fresh.revision++;
+    fresh.legacyExtensions = { advance: 'before first attempt' };
+    await persistence.commit(fresh, { projectRevision: beforeRetry.revision, entities: {}, resources: {} });
+    let attempts = 0;
+    const succeedsOnRetry = new CommandBus({
+      load: projectId => persistence.load(projectId),
+      async commit(next, expectation) {
+        if (++attempts === 1) {
+          const current = (await persistence.load(project.projectId))!.document;
+          current.revision++;
+          current.legacyExtensions = { advance: 'during first attempt' };
+          await persistence.commit(current, { projectRevision: current.revision - 1, entities: {}, resources: {} });
+        }
+        await persistence.commit(next, expectation);
+      }
+    }, () => {});
+    const retried = await succeedsOnRetry.dispatch(succeedsOnRetry.prepareSpriteProperties(beforeRetry, [
+      { spriteId: secondId, patch: { name: '重试成功' } }
+    ]));
+    equal([retried.ok, attempts], [true, 2]);
+    equal((await persistence.load(project.projectId))?.document.assets[1].name, '重试成功');
+
+    const prepare = () => bus.prepareSpriteProperties(beforeRetry, [{ spriteId: id, patch: { name: '草稿' } }]);
+    const pending = Array.from({ length: 128 }, prepare);
+    let rejectedAtCap = false;
+    try { prepare(); } catch (error) { rejectedAtCap = String(error).includes('Too many pending commands'); }
+    equal(rejectedAtCap, true);
+    equal(bus.cancel(pending[0]), true);
+    equal(bus.cancel(prepare()), true);
+    pending.slice(1).forEach(command => bus.cancel(command));
+    return { retrySucceedsAfterRebase: 'pass', pendingCap: 'pass', publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
   } finally { persistence.close(); indexedDB.deleteDatabase(db); }
 }
 

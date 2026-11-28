@@ -106,7 +106,6 @@ export class CommandBus {
     const affectedIds = [...operation.affectedIds];
     let attemptedRevision: number | null = null;
     let attempts = 0;
-    let rebased = false;
     let committed: ProjectDocument;
     try {
       while (true) {
@@ -122,7 +121,6 @@ export class CommandBus {
         }
         if (next.revision !== expectation.projectRevision) {
           if (operation.rebase === 'never') throw new ConflictError('project-cas', projectId);
-          rebased = true;
         }
         operation.apply(next);
         next.revision++;
@@ -134,8 +132,7 @@ export class CommandBus {
           break;
         } catch (error) {
           if (!(error instanceof ConflictError) || error.kind !== 'project-cas' ||
-              rebased || operation.rebase === 'never') throw error;
-          rebased = true;
+              attempts >= 2 || operation.rebase === 'never') throw error;
         }
       }
     } catch (error) {
