@@ -88,3 +88,9 @@ Edge 已验证数据库关闭后重开、蒙版历史恢复、不同 timeline �
 ### Agent 标注导入
 
 `prepareAgentAnnotationImport` 使用 V10 Sprite ID 接收结构化标签、置信度、复核状态和扩展元数据。整个批次共享一笔事务和一条撤销记录。无效值或未知目标拒绝整批，资源、几何与像素版本保持原值。V9 v1/v2 JSON 的 ID 映射和适配仍属 P1-4A。
+
+## P1-4A V9 ZIP 读取
+
+`readV9Archive` 在浏览器内读取实际 V9 场景 ZIP，验证中央目录、文件名、解压长度、CRC、包内路径和 Manifest 标识。支持 STORE 和 DEFLATE，拒绝卷组、加密、ZIP64 和越界档案。压缩与展开的包级上限各 512 MiB，单条目 128 MiB，最多 8192 项。
+
+Edge 用仓库内 A-010 实际导出包验证了 30 张 PNG、中文文件名和所有源裁切尺寸；另验了 DEFLATE、损坏 CRC、截断包和路径穿越拒绝。本入口只解包和读取 Manifest。字段迁移、隔离报告、UUID 映射和保存仍在后续步骤完成。

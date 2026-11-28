@@ -1,3 +1,4 @@
+import { crc32, deflateRawSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -24,9 +25,55 @@ const runtimeFixture = await build({
   entryPoints: [fileURLToPath(new URL('./interaction.browser.ts', import.meta.url))],
   bundle: true, write: false, format: 'esm'
 });
+const v9Fixture = await build({
+  entryPoints: [fileURLToPath(new URL('./v9-archive.browser.ts', import.meta.url))],
+  bundle: true, write: false, format: 'esm'
+});
+const v9Archive = await readFile(new URL('../../docs/v10/phase-0/results/A-010-v9-export-check.zip', import.meta.url));
+
+function deflatedManifest() {
+  const name = Buffer.from('manifest.json');
+  const data = Buffer.from(JSON.stringify({ format: 'spatial-scene-layout/v2', sprites: [] }));
+  const packed = deflateRawSync(data);
+  const crc = crc32(data);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(packed.length, 18);
+  local.writeUInt32LE(data.length, 22);
+  local.writeUInt16LE(name.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(packed.length, 20);
+  central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length + name.length, 12);
+  end.writeUInt32LE(local.length + name.length + packed.length, 16);
+  return Buffer.concat([local, name, packed, central, name, end]);
+}
+const deflatedArchive = deflatedManifest();
 const html = '<!doctype html><meta charset="utf-8"><pre id="result">pending</pre>';
 const server = createServer((request, response) => {
-  if (request.url === '/module.js' || request.url === '/fixture.js' || request.url === '/runtime.js') {
+  if (request.url === '/a010.zip' || request.url === '/deflated.zip') {
+    response.setHeader('content-type', 'application/zip');
+    response.end(request.url === '/a010.zip' ? v9Archive : deflatedArchive);
+  } else if (request.url === '/v9.js') {
+    response.setHeader('content-type', 'text/javascript; charset=utf-8');
+    response.end(v9Fixture.outputFiles[0].text);
+  } else if (request.url === '/v9') {
+    response.setHeader('content-type', 'text/html; charset=utf-8');
+    response.end(html + '<script type="module" src="/v9.js"></script>');
+  } else if (request.url === '/module.js' || request.url === '/fixture.js' || request.url === '/runtime.js') {
     response.setHeader('content-type', 'text/javascript; charset=utf-8');
     response.end((request.url === '/module.js' ? bundle : request.url === '/runtime.js' ? runtimeFixture : completeFixture).outputFiles[0].text);
   } else {
@@ -141,6 +188,14 @@ try {
     throw new Error('Native pointer capture or release failed: ' + JSON.stringify(native));
   }
 
+  const v9Tab = await openTab(endpoint, url + '/v9');
+  tabs.push(v9Tab);
+  const v9 = await waitFor(async () => {
+    const value = await v9Tab.evaluate('document.querySelector("#result")?.textContent');
+    return value && value !== 'pending' ? JSON.parse(value) : undefined;
+  }, 'V9 archive fixture');
+  if (v9.test?.error) throw new Error(v9.test.error);
+
   const first = await openTab(endpoint, url);
   tabs.push(first);
   const second = await openTab(endpoint, url);
@@ -190,7 +245,7 @@ try {
     return [document.revision, document.projectSettings.defaultFps];
   })()`);
   if (reopened[0] !== 2 || reopened[1] !== saved[0].saved) throw new Error('Reload did not read the winning commit');
-  console.log(JSON.stringify({ fixture: outcome, runtime, native, twoTabs: 'one commit, one stale entity conflict', reloaded: reopened }));
+  console.log(JSON.stringify({ fixture: outcome, runtime, native, v9, twoTabs: 'one commit, one stale entity conflict', reloaded: reopened }));
 } finally {
   for (const tab of tabs) tab.close();
   browser.kill();
