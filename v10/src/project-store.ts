@@ -233,6 +233,20 @@ export class ProjectStore {
     }
   }
 
+  async listProjects() {
+    const tx = this.database.transaction('projects', 'readonly');
+    return atomic(tx, async () => {
+      const documents = await result<ProjectDocument[]>(tx.objectStore('projects').getAll());
+      return documents.map(project => ({
+        projectId: project.projectId,
+        name: project.sourceImages[0]?.filename ?? '场景素材',
+        assets: project.assets.length,
+        importedAt: project.migrationMetadata?.migratedAt ?? ''
+      })).sort((left, right) => right.importedAt.localeCompare(left.importedAt) ||
+        left.name.localeCompare(right.name) || left.projectId.localeCompare(right.projectId));
+    });
+  }
+
   async load(projectId: string, historyId?: string) {
     const tx = this.database.transaction(['projects', 'resources', 'history'], 'readonly');
     const snapshot = await atomic(tx, async () => {

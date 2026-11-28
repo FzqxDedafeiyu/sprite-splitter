@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>精灵图切分编辑器 V10</title>
+<style>
+:root{color-scheme:dark;font:15px/1.5 system-ui,"Microsoft YaHei",sans-serif;background:#11151c;color:#e9eef7}
+*{box-sizing:border-box}
+body{margin:0}
+header{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:1.1rem 1.6rem;border-bottom:1px solid #303a49;background:#171d26}
+h1,h2,p{margin:0} h1{font-size:1.2rem} h2{font-size:1rem}
+button,select,input{font:inherit}
+button,.file{border:1px solid #414e61;border-radius:6px;background:#232e3c;color:inherit;padding:.45rem .8rem;cursor:pointer;white-space:nowrap}
+button.primary{border-color:#759ed7;background:#a4c5f3;color:#111b2b;font-weight:650}
+button:disabled,input:disabled+span{opacity:.43;cursor:default}
+:focus-visible{outline:2px solid #9ec5ff;outline-offset:2px}
+.file{display:inline-flex;align-items:center;gap:.55rem}
+.file input{max-width:240px}
+main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
+.toolbar, .actions{display:flex;flex-wrap:wrap;gap:.65rem;align-items:center}
+.toolbar select{min-width:190px;max-width:340px;border:1px solid #414e61;border-radius:6px;background:#1b2330;color:inherit;padding:.45rem}
+#status{min-height:2rem;margin-top:1rem;color:#b8cbe5}
+#status[data-error="true"]{color:#ffac98}
+.panel{border:1px solid #303a49;border-radius:9px;background:#171d26}
+#summary{padding:.85rem 1rem;margin:.65rem 0 1rem}
+#summary details{margin-top:.55rem;color:#bac6d7}
+#summary ul{margin:.35rem 0 0;padding-left:1.2rem;max-height:170px;overflow:auto}
+.workspace{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:1rem}
+.workspace h2{padding:.75rem 1rem;border-bottom:1px solid #303a49}
+#sprites{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
+#sprites button{display:block;width:100%;text-align:left;white-space:normal;border:0;border-bottom:1px solid #303a49;border-radius:0;background:transparent}
+#sprites button[aria-current="true"]{background:#283447;color:#cae0ff}
+#preview{min-height:265px;display:grid;place-items:center;padding:1.25rem;background:repeating-conic-gradient(#27313d 0% 25%,#1e2732 0% 50%) 50%/24px 24px}
+#preview img{max-width:100%;max-height:470px;object-fit:contain;image-rendering:pixelated}
+#selection{padding:.8rem 1rem;color:#bfcddd;overflow-wrap:anywhere}
+#summary[hidden], #image[hidden]{display:none}
+@media(max-width:740px){header{align-items:start;flex-direction:column}.workspace{grid-template-columns:1fr}#sprites{max-height:215px}main{padding:1rem}}
+</style>
+</head>
+<body>
+<header>
+<h1>精灵图切分编辑器 V10</h1>
+<div class="actions">
+<button type="button" class="primary" id="save" disabled>保存为 V10 项目</button>
+<button type="button" id="export" disabled>导出 V9 ZIP</button>
+</div>
+</header>
+<main>
+<div class="toolbar" aria-label="项目操作">
+<label class="file">导入 V9 ZIP <input id="zip" type="file" accept=".zip,application/zip"></label>
+<label><input id="orphans" type="checkbox">纳入未引用的 PNG</label>
+<label for="projects">已保存项目</label>
+<select id="projects"><option value="">选择项目</option></select>
+</div>
+<p id="status" role="status" aria-live="polite">正在打开本地存储…</p>
+<section id="summary" class="panel" aria-label="迁移报告" hidden>
+<p id="summary-text"></p>
+<details id="report"><summary>查看迁移提示</summary><ul id="warnings"></ul></details>
+</section>
+<div class="workspace">
+<section class="panel"><h2>素材</h2><ul id="sprites"></ul></section>
+<section class="panel">
+<h2>素材预览</h2>
+<div id="preview"><img id="image" alt="" hidden></div>
+<p id="selection">选择素材查看裁切图。</p>
+</section>
+</div>
+</main>
+<!-- WORKBENCH_SCRIPT -->
+</body>
+</html>

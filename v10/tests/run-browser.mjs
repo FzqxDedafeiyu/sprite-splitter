@@ -1,11 +1,12 @@
+import { buildWorkbench } from '../workbench/build.mjs';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 
 const browserPath = process.env.V10_BROWSER;
@@ -30,7 +31,8 @@ const v9Fixture = await build({
   bundle: true, write: false, format: 'esm'
 });
 const agentFixture = await readFile(new URL('../../docs/v10/phase-0/results/A-009-agent-json-roundtrip/agent_result.json', import.meta.url));
-const v9Archive = await readFile(new URL('../../docs/v10/phase-0/results/A-010-v9-export-check.zip', import.meta.url));
+const v9ArchivePath = new URL('../../docs/v10/phase-0/results/A-010-v9-export-check.zip', import.meta.url);
+const v9Archive = await readFile(v9ArchivePath);
 
 function deflatedManifest() {
   const name = Buffer.from('manifest.json');
@@ -140,6 +142,12 @@ async function openTab(endpoint, url) {
       return result.value;
     },
     reload: () => send('Page.reload'),
+    async selectFile(selector, path) {
+      const { root } = await send('DOM.getDocument');
+      const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector });
+      await send('DOM.setFileInputFiles', { nodeId, files: [path] });
+    },
+    downloads: downloadPath => send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath }),
     mouse: params => send('Input.dispatchMouseEvent', params),
     activate: () => send('Page.bringToFront'),
     close: () => ws.close()
@@ -200,6 +208,41 @@ try {
   }, 'V9 archive fixture');
   if (v9.test?.error) throw new Error(v9.test.error);
 
+  const uiPath = join(profile, 'sprite-v10-test.html');
+  await writeFile(uiPath, await buildWorkbench(), 'utf8');
+  const app = await openTab(endpoint, pathToFileURL(uiPath).href);
+  tabs.push(app);
+  const appStatus = () => app.evaluate('document.querySelector("#status")?.textContent');
+  await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'workbench ready');
+  await app.selectFile('#zip', fileURLToPath(v9ArchivePath));
+  await waitFor(async () => (await appStatus())?.includes('预览已就绪'), 'migration preview');
+  const expectedId = await app.evaluate(`(() => {
+    const items = document.querySelectorAll('#sprites button');
+    if (items.length !== 30 || document.querySelector('#save').disabled) throw Error('Preview table or save unavailable');
+    return items[0].dataset.spriteId;
+  })()`);
+  await app.evaluate('document.querySelector("#save").click()');
+  await waitFor(async () => (await appStatus())?.includes('已保存为 V10'), 'project save');
+  const savedProjectId = await app.evaluate('document.querySelector("#projects").value');
+  if (!savedProjectId) throw new Error('Missing saved workbench project ID');
+  await app.reload();
+  await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'workbench reload');
+  await app.evaluate(`(() => {
+    const select = document.querySelector('#projects');
+    select.value = ${JSON.stringify(savedProjectId)};
+    select.dispatchEvent(new Event('change'));
+  })()`);
+  await waitFor(async () => (await appStatus())?.includes('已打开 V10'), 'project reopen');
+  const reopenedId = await app.evaluate('document.querySelector("#sprites button").dataset.spriteId');
+  if (reopenedId !== expectedId) throw new Error('Reopened workbench changed sprite identity');
+  await app.downloads(profile);
+  await app.evaluate('document.querySelector("#export").click()');
+  await waitFor(async () => (await appStatus())?.includes('兼容 ZIP 已生成'), 'workbench export');
+  const downloaded = await waitFor(async () => (await readdir(profile)).find(name => name.endsWith('-v9.zip')), 'downloaded V9 archive');
+  const output = await readFile(join(profile, downloaded));
+  if (output.length < 22 || output.readUInt32LE(0) !== 0x04034b50) throw new Error('Invalid workbench download');
+  const workbench = { actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+
   const first = await openTab(endpoint, url);
   tabs.push(first);
   const second = await openTab(endpoint, url);
@@ -249,7 +292,7 @@ try {
     return [document.revision, document.projectSettings.defaultFps];
   })()`);
   if (reopened[0] !== 2 || reopened[1] !== saved[0].saved) throw new Error('Reload did not read the winning commit');
-  console.log(JSON.stringify({ fixture: outcome, runtime, native, v9, twoTabs: 'one commit, one stale entity conflict', reloaded: reopened }));
+  console.log(JSON.stringify({ fixture: outcome, runtime, native, v9, workbench, twoTabs: 'one commit, one stale entity conflict', reloaded: reopened }));
 } finally {
   for (const tab of tabs) tab.close();
   browser.kill();
