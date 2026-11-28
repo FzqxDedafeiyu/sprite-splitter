@@ -1,3 +1,4 @@
+import { collectAgentAnnotations, type AgentAnnotationEdit } from './agent-annotation-command.ts';
 import { applySceneEdits, collectSceneEdits, sceneItemKey, sceneOrderEdits, type SceneEdits, type SceneItemEdit } from './scene-command.ts';
 import { applySpritePresence, newSpriteEdit, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
 import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
@@ -51,7 +52,8 @@ const propertyNames = new Set(['name', 'category', 'description', 'groupName']);
 const spriteKey = (id: string) => 'spriteAsset:' + id;
 
 type SpritePropertyChange = { spriteId: string; patch: PropertyPatch };
-type PropertyChanges = Map<string, PropertyPatch>;
+type AssetPatch = PropertyPatch & Partial<Pick<SpriteAsset, 'agentAnnotation'>>;
+type PropertyChanges = Map<string, AssetPatch>;
 type HistoryChange =
   | { kind: 'properties'; undo: PropertyChanges; redo: PropertyChanges; bytes: 0 }
   | { kind: 'scene'; undo: SceneEdits; redo: SceneEdits; bytes: 0 }
@@ -67,8 +69,8 @@ function applyProperties(document: ProjectDocument, changes: PropertyChanges): E
     const patch = changes.get(sprite.id);
     if (!patch) return sprite;
     const next = { ...sprite };
-    const previous: PropertyPatch = {};
-    for (const key of Object.keys(patch) as Array<keyof PropertyPatch>) {
+    const previous: AssetPatch = {};
+    for (const key of Object.keys(patch) as Array<keyof AssetPatch>) {
       Object.assign(previous, { [key]: sprite[key] });
       if (patch[key] === undefined) Reflect.deleteProperty(next, key);
       else Object.assign(next, { [key]: patch[key] });
@@ -101,7 +103,6 @@ export class CommandBus {
 
   prepareCompositeSpriteProperties(snapshot: ProjectDocument,
     children: readonly (readonly SpritePropertyChange[])[]): string {
-    invariant(this.#plans.size < 128, 'Too many pending commands');
     invariant(children.length, 'Composite command has no children');
     const sprites = new Set(snapshot.assets.map(asset => asset.id));
     const patches: PropertyChanges = new Map();
@@ -125,10 +126,7 @@ export class CommandBus {
       rebase: 'independent-absolute-sprite-fields',
       apply: document => ({ history: applyProperties(document, patches) })
     };
-    const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
-      expectation: captureExpectations(snapshot, operation.changes) });
-    return commandId;
+    return this.#remember(snapshot, operation);
   }
 
   prepareSpriteRasterReplacement(snapshot: ProjectDocument, spriteId: string, patch: RasterReplacement): string {
@@ -140,7 +138,6 @@ export class CommandBus {
   }
 
   #prepareRaster(snapshot: ProjectDocument, spriteId: string, replacement: RasterEdit): string {
-    invariant(this.#plans.size < 128, 'Too many pending commands');
     invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
     invariant((replacement.png?.size ?? 0) + (replacement.mask?.size ?? 0) <= 1024 ** 3,
       'Raster replacement exceeds the byte limit');
@@ -151,10 +148,7 @@ export class CommandBus {
       rebase: 'never',
       apply: (document, bytes) => this.#applyRaster(document, bytes, spriteId, replacement)
     };
-    const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
-      expectation: captureExpectations(snapshot, operation.changes) });
-    return commandId;
+    return this.#remember(snapshot, operation);
   }
 
   async #applyRaster(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
@@ -180,7 +174,6 @@ export class CommandBus {
   }
 
   #prepareMaskPresence(snapshot: ProjectDocument, spriteId: string, edit: MaskPresenceEdit): string {
-    invariant(this.#plans.size < 128, 'Too many pending commands');
     invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
     const operation: Operation = {
       affectedIds: [spriteId],
@@ -189,10 +182,7 @@ export class CommandBus {
       rebase: 'never',
       apply: (document, bytes) => this.#applyMaskPresence(document, bytes, spriteId, edit)
     };
-    const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
-      expectation: captureExpectations(snapshot, operation.changes) });
-    return commandId;
+    return this.#remember(snapshot, operation);
   }
 
   async #applyMaskPresence(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
@@ -213,7 +203,6 @@ export class CommandBus {
   }
 
   #prepareSpritePresence(snapshot: ProjectDocument, edit: SpritePresenceEdit): string {
-    invariant(this.#plans.size < 128, 'Too many pending commands');
     invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
     const id = spritePresenceTarget(edit);
     const operation: Operation = {
@@ -222,10 +211,7 @@ export class CommandBus {
       rebase: 'never',
       apply: (document, bytes) => this.#applySpritePresence(document, bytes, edit)
     };
-    const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
-      expectation: captureExpectations(snapshot, operation.changes) });
-    return commandId;
+    return this.#remember(snapshot, operation);
   }
 
   async #applySpritePresence(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
@@ -239,7 +225,6 @@ export class CommandBus {
   }
 
   prepareSceneItemUpdates(snapshot: ProjectDocument, edits: readonly SceneItemEdit[]): string {
-    invariant(this.#plans.size < 128, 'Too many pending commands');
     const patches = collectSceneEdits(snapshot, edits);
     const affectedIds = [...patches.keys()];
     const operation: Operation = {
@@ -250,14 +235,31 @@ export class CommandBus {
         history: { kind: 'scene', ...applySceneEdits(document, patches), bytes: 0 }
       })
     };
-    const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
-      expectation: captureExpectations(snapshot, operation.changes) });
-    return commandId;
+    return this.#remember(snapshot, operation);
   }
 
   prepareSceneOrder(snapshot: ProjectDocument, bottomToTop: readonly string[]): string {
     return this.prepareSceneItemUpdates(snapshot, sceneOrderEdits(snapshot, bottomToTop));
+  }
+
+  prepareAgentAnnotationImport(snapshot: ProjectDocument, edits: readonly AgentAnnotationEdit[]): string {
+    const patches = collectAgentAnnotations(snapshot, edits);
+    const affectedIds = [...patches.keys()];
+    const operation: Operation = {
+      affectedIds,
+      changes: { readEntities: [], writeEntities: affectedIds.map(spriteKey), resources: [] },
+      rebase: 'never',
+      apply: document => ({ history: applyProperties(document, patches) })
+    };
+    return this.#remember(snapshot, operation);
+  }
+
+  #remember(snapshot: ProjectDocument, operation: Operation): string {
+    invariant(this.#plans.size < 128, 'Too many pending commands');
+    const commandId = crypto.randomUUID();
+    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
+      expectation: captureExpectations(snapshot, operation.changes) });
+    return commandId;
   }
 
   cancel(commandId: string): boolean { return this.#plans.delete(commandId); }

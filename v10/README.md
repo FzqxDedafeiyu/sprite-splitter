@@ -84,3 +84,7 @@ Edge 已验证数据库关闭后重开、蒙版历史恢复、不同 timeline �
 ### 场景项更新与顺序
 
 `prepareSceneItemUpdates` 原子更新现有场景项的层级、位置、变换和显示属性。`prepareSceneOrder` 接收完整的底到顶顺序并以一条历史命令更新 zIndex。锁定项移动会拒绝整个批次。只更新受影响场景项版本，场景集合成员版本保持不变。新增场景项入口将随编辑器接入。
+
+### Agent 标注导入
+
+`prepareAgentAnnotationImport` 使用 V10 Sprite ID 接收结构化标签、置信度、复核状态和扩展元数据。整个批次共享一笔事务和一条撤销记录。无效值或未知目标拒绝整批，资源、几何与像素版本保持原值。V9 v1/v2 JSON 的 ID 映射和适配仍属 P1-4A。

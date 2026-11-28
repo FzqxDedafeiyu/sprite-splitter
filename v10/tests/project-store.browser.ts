@@ -638,7 +638,30 @@ async function spriteLifecycleTests() {
     equal([oldOrder.sceneLayout.items[id].zIndex, oldOrder.sceneLayout.items[secondId].zIndex], [0, 1]);
     equal(oldOrder.sceneLayout.items[secondId].locked, true);
     equal((await sceneBus.redo(pid)).ok, true);
-    return { sceneAtomicity: 'pass', sceneUndoRedo: 'pass', createWithUndoRedo: 'pass', deleteWithMaskRestore: 'pass', referencedSpriteProtection: 'pass' };
+    const agentBase = await load();
+    const agentBus = new CommandBus(store, () => {});
+    let invalidAnnotation = false;
+    try {
+      agentBus.prepareAgentAnnotationImport(agentBase, [
+        { spriteId: id, annotation: { tags: ['山'], confidence: 0.85 } },
+        { spriteId: secondId, annotation: { tags: [], confidence: 1.1 } }
+      ]);
+    } catch (error) { invalidAnnotation = String(error).includes('Invalid annotation confidence'); }
+    equal(invalidAnnotation, true);
+    equal((await load()).revision, agentBase.revision);
+    const annotated = await agentBus.dispatch(agentBus.prepareAgentAnnotationImport(agentBase, [
+      { spriteId: id, annotation: { tags: ['山'], confidence: 0.85, reviewStatus: 'needs_review' } },
+      { spriteId: secondId, annotation: { tags: ['海'], confidence: 0.6, legacyExtensions: { source: 'agent-v2' } } }
+    ]));
+    equal(annotated.ok, true);
+    const imported = await load();
+    equal(imported.assets.map(asset => [asset.id, asset.rasterResource.resourceId, asset.contentVersion]),
+      agentBase.assets.map(asset => [asset.id, asset.rasterResource.resourceId, asset.contentVersion]));
+    equal(imported.assets.map(asset => asset.agentAnnotation?.tags), [['山'], ['海']]);
+    equal((await agentBus.undo(pid)).ok, true);
+    equal((await load()).assets.every(asset => asset.agentAnnotation === undefined), true);
+    equal((await agentBus.redo(pid)).ok, true);
+    return { agentAnnotationAtomicity: 'pass', agentAnnotationUndoRedo: 'pass', sceneAtomicity: 'pass', sceneUndoRedo: 'pass', createWithUndoRedo: 'pass', deleteWithMaskRestore: 'pass', referencedSpriteProtection: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 
