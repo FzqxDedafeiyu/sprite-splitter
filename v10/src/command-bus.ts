@@ -1,3 +1,4 @@
+import { applySceneEdits, collectSceneEdits, sceneItemKey, sceneOrderEdits, type SceneEdits, type SceneItemEdit } from './scene-command.ts';
 import { applySpritePresence, newSpriteEdit, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
 import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
 import { applyRasterReplacement, findSprite, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
@@ -53,6 +54,7 @@ type SpritePropertyChange = { spriteId: string; patch: PropertyPatch };
 type PropertyChanges = Map<string, PropertyPatch>;
 type HistoryChange =
   | { kind: 'properties'; undo: PropertyChanges; redo: PropertyChanges; bytes: 0 }
+  | { kind: 'scene'; undo: SceneEdits; redo: SceneEdits; bytes: 0 }
   | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number }
   | { kind: 'mask-presence'; spriteId: string; undo: MaskPresenceEdit; redo: MaskPresenceEdit; bytes: number }
   | { kind: 'sprite-presence'; spriteId: string; undo: SpritePresenceEdit; redo: SpritePresenceEdit; bytes: number };
@@ -236,6 +238,28 @@ export class CommandBus {
         undo: change.undo, redo: change.redo, bytes: change.bytes } };
   }
 
+  prepareSceneItemUpdates(snapshot: ProjectDocument, edits: readonly SceneItemEdit[]): string {
+    invariant(this.#plans.size < 128, 'Too many pending commands');
+    const patches = collectSceneEdits(snapshot, edits);
+    const affectedIds = [...patches.keys()];
+    const operation: Operation = {
+      affectedIds,
+      changes: { readEntities: [], writeEntities: affectedIds.map(sceneItemKey), resources: [] },
+      rebase: 'never',
+      apply: document => ({
+        history: { kind: 'scene', ...applySceneEdits(document, patches), bytes: 0 }
+      })
+    };
+    const commandId = crypto.randomUUID();
+    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
+      expectation: captureExpectations(snapshot, operation.changes) });
+    return commandId;
+  }
+
+  prepareSceneOrder(snapshot: ProjectDocument, bottomToTop: readonly string[]): string {
+    return this.prepareSceneItemUpdates(snapshot, sceneOrderEdits(snapshot, bottomToTop));
+  }
+
   cancel(commandId: string): boolean { return this.#plans.delete(commandId); }
 
   async dispatch(commandId: string): Promise<CommandResult> {
@@ -269,17 +293,19 @@ export class CommandBus {
       if (!entry) return { ok: false, commandId, affectedIds, baseRevision, attemptedRevision: null, attempts,
         error: { code: 'empty-history', message: 'There is no history entry to apply.', retryable: false } };
       const change = entry.change;
-      affectedIds = change.kind === 'properties' ? [...change[direction].keys()] : [change.spriteId];
+      affectedIds = change.kind === 'properties' || change.kind === 'scene' ? [...change[direction].keys()] : [change.spriteId];
       baseRevision = entry.revision;
       document = snapshot.document;
       if (document.revision !== baseRevision) throw new ConflictError('project-cas', projectId);
       const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) :
         change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) :
         change.kind === 'sprite-presence' ? spritePresenceResources(document, change[direction]) : [];
-      const checks = captureExpectations(document, { readEntities: [], writeEntities: affectedIds.map(spriteKey),
+      const keys = affectedIds.map(change.kind === 'scene' ? sceneItemKey : spriteKey);
+      const checks = captureExpectations(document, { readEntities: [], writeEntities: keys,
         resources: resourceIds });
       let stageId: string | undefined;
       if (change.kind === 'properties') applyProperties(document, change[direction]);
+      else if (change.kind === 'scene') applySceneEdits(document, change[direction]);
       else if (change.kind === 'raster') {
         stageId = (await this.#applyRaster(document, snapshot.bytes, change.spriteId, change[direction])).stageId;
       } else if (change.kind === 'mask-presence') {

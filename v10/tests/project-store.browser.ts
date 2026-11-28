@@ -604,7 +604,41 @@ async function spriteLifecycleTests() {
     catch (error) { deleteRefused = String(error).includes('Detach scene and animation references'); }
     equal(deleteRefused, true);
     equal((await load()).revision, reference.revision);
-    return { createWithUndoRedo: 'pass', deleteWithMaskRestore: 'pass', referencedSpriteProtection: 'pass' };
+    const scene = structuredClone(reference);
+    scene.revision++;
+    scene.sceneLayout.revision++;
+    const sceneKey = 'sceneLayout:' + pid;
+    scene.revisionLedger.entities[sceneKey]++;
+    for (const [index, spriteId] of [id, secondId].entries()) {
+      scene.sceneLayout.items[spriteId] = {
+        spriteId, layer: 'midground', depth: 0.5, parallax: 0.7, zIndex: index,
+        visible: true, locked: index === 1, position: { x: index, y: 0 },
+        transform: { scaleX: 1, scaleY: 1, rotation: 0 }, sceneAnchor: { x: 0, y: 0 },
+        anchorSource: 'defaulted', relations: { nearTo: [], attachedTo: [], supports: [] }, revision: 1
+      };
+      scene.revisionLedger.entities['sceneItem:' + spriteId] = 1;
+    }
+    await store.commit(scene, { projectRevision: reference.revision, entities: {
+      [sceneKey]: { state: 'present', revision: 1 }, ['sceneItem:' + id]: { state: 'absent' },
+      ['sceneItem:' + secondId]: { state: 'absent' }
+    }, resources: {} });
+    const sceneBus = new CommandBus(store, () => {});
+    const unsafe = sceneBus.prepareSceneItemUpdates(scene, [
+      { spriteId: id, patch: { position: { x: 10, y: 20 } } },
+      { spriteId: secondId, patch: { position: { x: 30, y: 40 } } }
+    ]);
+    equal((await sceneBus.dispatch(unsafe)).ok, false);
+    equal((await load()).sceneLayout, scene.sceneLayout);
+    equal((await sceneBus.dispatch(sceneBus.prepareSceneOrder(scene, [secondId, id]))).ok, true);
+    const reordered = await load();
+    equal([reordered.sceneLayout.items[id].zIndex, reordered.sceneLayout.items[secondId].zIndex], [1, 0]);
+    equal(reordered.sceneLayout.revision, scene.sceneLayout.revision);
+    equal((await sceneBus.undo(pid)).ok, true);
+    const oldOrder = await load();
+    equal([oldOrder.sceneLayout.items[id].zIndex, oldOrder.sceneLayout.items[secondId].zIndex], [0, 1]);
+    equal(oldOrder.sceneLayout.items[secondId].locked, true);
+    equal((await sceneBus.redo(pid)).ok, true);
+    return { sceneAtomicity: 'pass', sceneUndoRedo: 'pass', createWithUndoRedo: 'pass', deleteWithMaskRestore: 'pass', referencedSpriteProtection: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 

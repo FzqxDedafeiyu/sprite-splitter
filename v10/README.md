@@ -80,3 +80,7 @@ Edge 已验证数据库关闭后重开、蒙版历史恢复、不同 timeline �
 ### 素材创建和删除
 
 `prepareSpriteCreation` 原子写入新 Sprite 和 PNG，`prepareSpriteDeletion` 移除未被场景、组或动画引用且独立持有资源的素材。删除不级联移除依赖。撤销恢复原有顺序、Sprite ID、PNG 和蒙版 ID，并按 tombstone 继续推进版本。恢复使用最后一个活动版本的字节摘要，退休资源回收会保护仍被历史引用的 PNG 和蒙版。
+
+### 场景项更新与顺序
+
+`prepareSceneItemUpdates` 原子更新现有场景项的层级、位置、变换和显示属性。`prepareSceneOrder` 接收完整的底到顶顺序并以一条历史命令更新 zIndex。锁定项移动会拒绝整个批次。只更新受影响场景项版本，场景集合成员版本保持不变。新增场景项入口将随编辑器接入。
