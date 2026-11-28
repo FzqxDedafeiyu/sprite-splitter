@@ -1,7 +1,10 @@
+import { exportV9Scene } from '../src/v9-export.ts';
+import { sameValue } from '../src/project.ts';
+import { CommandBus } from '../src/command-bus.ts';
 import { previewV9Migration, saveV9Migration } from '../src/v9-migration.ts';
-import { ProjectStore } from '../src/project-store.ts';
+import { ProjectStore, resourceHash } from '../src/project-store.ts';
 import { readV9Archive, readV9Zip } from '../src/v9-archive.ts';
-import { inspectRaster } from '../src/mask.ts';
+import { inspectRaster, encodeMask } from '../src/mask.ts';
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -89,8 +92,37 @@ async function verify() {
     const loaded = await store.load(migrated.projectId);
     assert(loaded?.bytes.size === 30 && loaded.document.assets.every((item, index) =>
       item.id === migrated.assets[index].id), 'UUID or raster was regenerated after reopen');
+    const originalExport = await exportV9Scene(loaded!.document, loaded!.bytes);
+    const reopenedExport = await readV9Archive(originalExport.archive);
+    assert(sameValue(reopenedExport.manifest, manifest), 'Frozen V9 Manifest fields changed on round trip');
+    assert(originalExport.idMap.length === 30 && originalExport.idMap[0].spriteId === migrated.assets[0].id,
+      'Export ID bridge was lost');
+    for (const [path, original] of files) {
+      const exported = reopenedExport.files.get(path);
+      assert(exported && await resourceHash(exported) === await resourceHash(original), 'Unmasked V9 PNG changed: ' + path);
+    }
+
+    const first = loaded!.document.assets[0];
+    const bounds = first.sourceRect!;
+    const bus = new CommandBus(store, () => {});
+    const attached = await bus.dispatch(bus.prepareSpriteMaskAttachment(loaded!.document, first.id,
+      encodeMask(bounds.width, bounds.height, new Uint8Array(bounds.width * bounds.height))));
+    assert(attached.ok, 'Could not attach export test mask');
+    const edited = (await store.load(migrated.projectId))!;
+    const maskedExport = await exportV9Scene(edited.document, edited.bytes);
+    const decodedExport = await readV9Archive(maskedExport.archive);
+    assert(sameValue(decodedExport.manifest, manifest), 'A V10 mask must not change the frozen manifest');
+    const maskedFile = decodedExport.files.get('sprites/' + maskedExport.manifest.sprites[0].file)!;
+    const bitmap = await createImageBitmap(maskedFile);
+    try {
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const context = canvas.getContext('2d')!;
+      context.drawImage(bitmap, 0, 0);
+      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      assert(data.every((byte, index) => index % 4 !== 3 || byte === 0), 'V9 PNG export ignored effective mask alpha');
+    } finally { bitmap.close(); }
   } finally { store.close(); indexedDB.deleteDatabase(db); }
-  return { v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
+  return { v9FrozenManifestRoundTrip: 'pass', v9MaskedExport: 'pass', v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
     corruptCrc: 'pass', truncated: 'pass', pathTraversal: 'pass' };
 }
 verify().then(value => {

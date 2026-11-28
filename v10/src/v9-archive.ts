@@ -1,8 +1,8 @@
 import { invariant, safeAssetPath } from './project.ts';
 
-const maxEntryBytes = 128 * 1024 ** 2;
-const maxArchiveBytes = 512 * 1024 ** 2;
-const maxEntries = 8192;
+export const maxEntryBytes = 128 * 1024 ** 2;
+export const maxArchiveBytes = 512 * 1024 ** 2;
+export const maxEntries = 8192;
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const crcTable = Uint32Array.from({ length: 256 }, (_, index) => {
   let value = index;
@@ -10,7 +10,7 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, index) => {
   return value;
 });
 
-function crc32(bytes: Uint8Array): number {
+export function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of bytes) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff];
   return (crc ^ 0xffffffff) >>> 0;
