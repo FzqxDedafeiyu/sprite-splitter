@@ -13,9 +13,34 @@ export function buildV9SceneManifest(project: ProjectDocument) {
     finiteDimensions(world.width) && finiteDimensions(world.height) &&
     source.width === world.width && source.height === world.height, 'V9 scene export needs one source with known canvas size');
 
-  const ids = new Map(project.assets.map((asset, index) => [asset.id, legacyId(index)]));
+  const ids = new Map<string, string>();
+  const usedIds = new Set<string>();
+  const seenIndexes = new Map<number, number>();
+  for (const asset of project.assets) {
+    if (asset.legacyId) {
+      invariant(!usedIds.has(asset.legacyId), 'Duplicate V9 legacy ID: ' + asset.legacyId);
+      ids.set(asset.id, asset.legacyId);
+      usedIds.add(asset.legacyId);
+    }
+    const index = asset.legacyIndex;
+    if (asset.legacyId && index !== undefined && Number.isSafeInteger(index) && index > 0) {
+      seenIndexes.set(index, (seenIndexes.get(index) ?? 0) + 1);
+    }
+  }
+  const reservedIndexes = new Set(seenIndexes.keys());
+  let nextIndex = 1;
   const usedPaths = new Set<string>();
-  const sprites = project.assets.map((asset, index) => {
+  const sprites = project.assets.map(asset => {
+    let index = asset.legacyId ? asset.legacyIndex : undefined;
+    if (index === undefined || seenIndexes.get(index) !== 1) {
+      while (reservedIndexes.has(nextIndex) || (!asset.legacyId && usedIds.has(legacyId(nextIndex - 1)))) nextIndex++;
+      index = nextIndex++;
+    }
+    if (!ids.has(asset.id)) {
+      const id = legacyId(index - 1);
+      ids.set(asset.id, id);
+      usedIds.add(id);
+    }
     const rect = asset.sourceRect;
     const item = project.sceneLayout.items[asset.id];
     invariant(rect && asset.sourceRectStatus === 'known' && item &&
@@ -26,35 +51,41 @@ export function buildV9SceneManifest(project: ProjectDocument) {
     const numeric = [dx, dy, item.sceneAnchor.x - dx, item.sceneAnchor.y - dy,
       item.depth, item.parallax, item.zIndex, item.transform.scaleX, item.transform.scaleY, item.transform.rotation];
     invariant(numeric.every(Number.isFinite), 'V9 scene export cannot encode non-finite geometry');
-    const transformRelations = (targets: string[]) => targets.map(target => {
-      const result = ids.get(target);
-      invariant(result, 'V9 relation does not have an export ID: ' + target);
-      return result;
-    });
-
-    const prefix = String(index + 1).padStart(3, '0') + '_';
+    const prefix = String(index).padStart(3, '0') + '_';
     const leaf = asset.assetRef.split('/').at(-1)!;
     const label = (asset.name || 'sprite').replace(/[\\/:*?"<>|%#\u0000-\u001f]/g, '_').replace(/\s+/g, '_').slice(0, 100);
-    const file = leaf.startsWith(prefix) && safeAssetPath(leaf) && /\.png$/i.test(leaf)
+    const file = (asset.legacyId || leaf.startsWith(prefix)) && safeAssetPath(leaf) && /\.png$/i.test(leaf)
       ? leaf : prefix + label + '.png';
     const path = 'sprites/' + file;
     invariant(!usedPaths.has(path.normalize('NFC')), 'Duplicate V9 export path');
     usedPaths.add(path.normalize('NFC'));
 
-    return { id: legacyId(index), index: index + 1, name: asset.name || 'sprite_' + (index + 1),
+    return { id: ids.get(asset.id)!, index, name: asset.name || 'sprite_' + index,
       category: asset.category || 'uncategorized', description: asset.description ?? '', group: asset.groupName || null,
       visible: item.visible, locked: item.locked, sourceRect: { ...rect },
       anchor: { x: item.sceneAnchor.x - dx, y: item.sceneAnchor.y - dy },
       layout: { layer: item.layer, depth: item.depth, parallax: item.parallax, zIndex: item.zIndex },
       transform: { x: dx, y: dy, scaleX: item.transform.scaleX, scaleY: item.transform.scaleY, rotation: item.transform.rotation },
-      relations: { nearTo: transformRelations(item.relations.nearTo), attachedTo: transformRelations(item.relations.attachedTo),
-        supports: transformRelations(item.relations.supports) },
+      relations: item.relations,
       shape: asset.shape, ...(asset.shape === 'polygon' && asset.points ? { points: asset.points.map(point => ({ ...point })) } : {}), file };
   });
 
+  function exportedRelation(targets: string[]) {
+    return targets.map(target => {
+      const id = ids.get(target);
+      invariant(id, 'V9 relation does not have an export ID: ' + target);
+      return id;
+    });
+  }
+  const resolved = sprites.map(sprite => ({ ...sprite, relations: {
+    nearTo: exportedRelation(sprite.relations.nearTo),
+    attachedTo: exportedRelation(sprite.relations.attachedTo),
+    supports: exportedRelation(sprite.relations.supports)
+  } }));
+
   return { format: 'spatial-scene-layout/v2', source: source.filename,
     canvas: { width: world.width!, height: world.height!, coordinateOrigin: 'top-left', units: 'source-pixels' },
-    layoutMode: project.sceneLayout.mode ?? 'source-coordinate-preserving', sprites };
+    layoutMode: project.sceneLayout.mode ?? 'source-coordinate-preserving', sprites: resolved };
 }
 
 async function exportPng(asset: SpriteAsset, getBytes: (id: string) => Blob | undefined) {

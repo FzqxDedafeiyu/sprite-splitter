@@ -1,5 +1,5 @@
 import { previewV9AgentAnnotations } from '../src/v9-agent.ts';
-import { exportV9Scene } from '../src/v9-export.ts';
+import { buildV9SceneManifest, exportV9Scene } from '../src/v9-export.ts';
 import { sameValue } from '../src/project.ts';
 import { CommandBus } from '../src/command-bus.ts';
 import { previewV9Migration, saveV9Migration } from '../src/v9-migration.ts';
@@ -122,6 +122,26 @@ async function verify() {
     assert((await annotationCommand.undo(migrated.projectId)).ok, 'Agent annotations should be reversible');
     loaded = (await store.load(migrated.projectId))!;
 
+    const reorderedProject = structuredClone(loaded!.document);
+    const [firstOriginal, , thirdOriginal] = reorderedProject.assets;
+    const extra = { ...firstOriginal, id: crypto.randomUUID(), name: '新增', legacyId: undefined, legacyIndex: undefined,
+      assetRef: 'sprites/new.png' };
+    reorderedProject.assets = [thirdOriginal, firstOriginal, extra];
+    const firstLayout = reorderedProject.sceneLayout.items[firstOriginal.id];
+    const thirdLayout = reorderedProject.sceneLayout.items[thirdOriginal.id];
+    firstLayout.relations = { nearTo: [thirdOriginal.id], attachedTo: [], supports: [] };
+    thirdLayout.relations = { nearTo: [], attachedTo: [firstOriginal.id], supports: [] };
+    reorderedProject.sceneLayout.items = { [thirdOriginal.id]: thirdLayout, [firstOriginal.id]: firstLayout,
+      [extra.id]: { ...firstLayout, spriteId: extra.id } };
+    const sparse = buildV9SceneManifest(reorderedProject);
+    assert(sparse.sprites[0].id === 'sprite_003' && sparse.sprites[0].index === 3 &&
+      sparse.sprites[0].file === thirdOriginal.assetRef.split('/').at(-1) &&
+      sparse.sprites[0].relations.attachedTo[0] === 'sprite_001' &&
+      sparse.sprites[1].id === 'sprite_001' && sparse.sprites[1].index === 1 &&
+      sparse.sprites[1].relations.nearTo[0] === 'sprite_003' &&
+      sparse.sprites[2].id === 'sprite_002' && sparse.sprites[2].index === 2,
+      'Reordered or sparse V9 IDs, sequence, paths or relations were renumbered');
+
     const originalExport = await exportV9Scene(loaded!.document, loaded!.bytes);
     const reopenedExport = await readV9Archive(originalExport.archive);
     assert(sameValue(reopenedExport.manifest, manifest), 'Frozen V9 Manifest fields changed on round trip');
@@ -152,7 +172,7 @@ async function verify() {
       assert(data.every((byte, index) => index % 4 !== 3 || byte === 0), 'V9 PNG export ignored effective mask alpha');
     } finally { bitmap.close(); }
   } finally { store.close(); indexedDB.deleteDatabase(db); }
-  return { v9AgentAnnotationAdapter: 'pass', v9FrozenManifestRoundTrip: 'pass', v9MaskedExport: 'pass', v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
+  return { v9StableLegacyExportIds: 'pass', v9AgentAnnotationAdapter: 'pass', v9FrozenManifestRoundTrip: 'pass', v9MaskedExport: 'pass', v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
     corruptCrc: 'pass', truncated: 'pass', pathTraversal: 'pass' };
 }
 verify().then(value => {
