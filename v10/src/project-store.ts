@@ -47,7 +47,7 @@ async function atomic<T>(transaction: IDBTransaction, run: () => Promise<T>): Pr
   }
 }
 
-async function hash(bytes: Blob): Promise<string> {
+export async function resourceHash(bytes: Blob): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await bytes.arrayBuffer());
   return 'sha256:' + Array.from(new Uint8Array(digest),
     byte => byte.toString(16).padStart(2, '0')).join('');
@@ -177,7 +177,7 @@ export class ProjectStore {
     const bytes = new Map<string, Blob>();
     for (const { version, stored } of snapshot.records) {
       invariant(stored && sameValue(stored.version, version) && stored.bytes.size === version.byteLength &&
-        await hash(stored.bytes) === version.contentHash, 'Missing or damaged resource: ' + version.resourceId);
+        await resourceHash(stored.bytes) === version.contentHash, 'Missing or damaged resource: ' + version.resourceId);
       bytes.set(version.resourceId, stored.bytes);
     }
     return { document: snapshot.document, bytes };
@@ -185,7 +185,7 @@ export class ProjectStore {
 
   async stage(projectId: string, input: readonly StagedInput[]) {
     const records = await Promise.all(input.map(async ({ resourceId, revision, bytes }) => ({
-      version: { resourceId, revision, byteLength: bytes.size, contentHash: await hash(bytes) },
+      version: { resourceId, revision, byteLength: bytes.size, contentHash: await resourceHash(bytes) },
       bytes, raster: await inspectRaster(bytes)
     })));
     invariant(records.length > 0 && new Set(records.map(({ version }) => version.resourceId)).size === records.length,

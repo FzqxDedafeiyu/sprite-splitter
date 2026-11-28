@@ -1,6 +1,6 @@
 export type HistoryDirection = 'undo' | 'redo';
 
-type Entry<T> = { change: T; revision: number; segment: number; createdAt: number };
+type Entry<T> = { change: T; revision: number; segment: number; createdAt: number; bytes: number };
 const retention = 30 * 24 * 60 * 60 * 1000;
 
 export class SessionHistory<T> {
@@ -8,13 +8,14 @@ export class SessionHistory<T> {
   #redo: Entry<T>[] = [];
   #segment = 0;
 
-  record(change: T, before: number, after: number) {
+  record(change: T, before: number, after: number, bytes = 0) {
     this.#prune();
     const tip = this.#undo.at(-1);
     if (!tip || tip.revision !== before) this.#segment++;
-    this.#undo.push({ change, revision: after, segment: this.#segment, createdAt: Date.now() });
+    this.#undo.push({ change, revision: after, segment: this.#segment, createdAt: Date.now(), bytes });
     this.#redo = [];
-    if (this.#undo.length > 100) this.#undo.shift();
+    let total = this.#undo.reduce((sum, entry) => sum + entry.bytes, 0);
+    while (this.#undo.length > 100 || total > 1024 ** 3) total -= this.#undo.shift()!.bytes;
   }
 
   peek(direction: HistoryDirection) {

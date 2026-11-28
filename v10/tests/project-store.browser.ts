@@ -361,7 +361,78 @@ async function commandTests() {
   } finally { persistence.close(); indexedDB.deleteDatabase(db); }
 }
 
-Promise.all([run(), commandTests()]).then(([fixture, commands]) => {
-  const value = { ...fixture, commands };
+async function rasterCommandTests() {
+  const db = 'sprite-v10-raster-commands-' + crypto.randomUUID();
+  const store = await ProjectStore.open(db);
+  try {
+    const blank = createProject();
+    await store.create(blank);
+    const id = crypto.randomUUID();
+    const pngId = crypto.randomUUID();
+    const maskId = crypto.randomUUID();
+    const oldPng = await png();
+    const oldMask = encodeMask(2, 2, new Uint8Array([0, 1, 2, 3]));
+    const staged = await store.stage(blank.projectId, [
+      { resourceId: pngId, revision: 1, bytes: oldPng }, { resourceId: maskId, revision: 1, bytes: oldMask }
+    ]);
+    const start = structuredClone(blank);
+    start.revision++;
+    const key = 'spriteAsset:' + id;
+    start.assets.push({
+      id, name: '角色', category: 'character', revision: 1, contentVersion: 1, shape: 'rectangle',
+      sourceRectStatus: 'unknown', assetRef: 'sprites/角色.png', rasterResource: staged.versions[0],
+      mask: { ...staged.versions[1], assetRef: 'masks/角色.ssm', kind: 'mask', encoding: 'bitmap',
+        coordinateSpace: 'spriteLocal', width: 2, height: 2 }
+    });
+    start.revisionLedger.entities[key] = 1;
+    start.revisionLedger.resources = { [pngId]: 1, [maskId]: 1 };
+    await store.commit(start, { projectRevision: 1, entities: { [key]: { state: 'absent' } },
+      resources: { [pngId]: { state: 'absent' }, [maskId]: { state: 'absent' } } }, staged.id);
+    const canvas = new OffscreenCanvas(2, 2);
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, 2, 2);
+    const newPng = await canvas.convertToBlob({ type: 'image/png' });
+    const newMask = encodeMask(2, 2, new Uint8Array([4, 3, 2, 1]));
+    const bus = new CommandBus(store, () => {});
+    const invalid = await bus.dispatch(bus.prepareSpriteRasterReplacement(start, id,
+      { png: newPng, mask: encodeMask(1, 1, new Uint8Array([255])) }));
+    equal(invalid.ok, false);
+    equal((await store.load(blank.projectId))?.document.revision, 2);
+    equal(await store.collectExpiredStages(Date.now() + 24 * 60 * 60 * 1000), 0);
+    const draft = bus.prepareSpriteRasterReplacement(start, id, { png: newPng, mask: newMask });
+    const stale = bus.prepareSpriteRasterReplacement(start, id, { mask: newMask });
+    equal((await bus.dispatch(draft)).ok, true);
+    const rejected = await bus.dispatch(stale);
+    equal(!rejected.ok && [rejected.error.code, rejected.attempts], ['target-entity', 0]);
+    const verify = async (revision: number, pngBytes: Blob, maskBytes: Blob) => {
+      const loaded = (await store.load(blank.projectId))!;
+      const asset = loaded.document.assets[0];
+      equal([loaded.document.revision, asset.revision, asset.contentVersion, asset.rasterResource.revision,
+        asset.mask?.revision], [revision + 1, revision, revision, revision, revision]);
+      for (const [resourceId, bytes] of [[pngId, pngBytes], [maskId, maskBytes]] as const) {
+        equal(Array.from(new Uint8Array(await loaded.bytes.get(resourceId)!.arrayBuffer())),
+          Array.from(new Uint8Array(await bytes.arrayBuffer())));
+      }
+    };
+    await verify(2, newPng, newMask);
+    equal((await bus.undo(blank.projectId)).ok, true);
+    await verify(3, oldPng, oldMask);
+    equal((await bus.redo(blank.projectId)).ok, true);
+    await verify(4, newPng, newMask);
+    const final = (await store.load(blank.projectId))!.document;
+    const newer = structuredClone(final);
+    newer.revision++;
+    newer.legacyExtensions = { external: true };
+    await store.commit(newer, { projectRevision: final.revision, entities: {}, resources: {} });
+    const undo = await bus.undo(blank.projectId);
+    equal(!undo.ok && [undo.error.code, undo.attempts], ['project-cas', 0]);
+    equal((await store.load(blank.projectId))?.document.assets[0].mask?.revision, 4);
+    return { rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
+  } finally { store.close(); indexedDB.deleteDatabase(db); }
+}
+
+Promise.all([run(), commandTests(), rasterCommandTests()]).then(([fixture, commands, rasterCommands]) => {
+  const value = { ...fixture, commands, rasterCommands };
   document.querySelector('#result')!.textContent = JSON.stringify(value); },
   error => { document.querySelector('#result')!.textContent = JSON.stringify({ test: { error: String(error.stack ?? error) } }); });
