@@ -4,7 +4,7 @@ import type { ProjectDocument, ResourceVersion } from './domain.ts';
 import { entities, invariant, resources, sameValue, validateProject } from './project.ts';
 import { inspectRaster } from './mask.ts';
 
-type Expectation = { state: 'absent' } | { state: 'present'; revision: number };
+type Expectation = { state: 'absent' } | { state: 'present' | 'tombstone'; revision: number };
 type ResourceExpectation = { state: 'absent' } | { state: 'tombstone'; revision: number } |
   { state: 'present'; revision: number; contentHash: string };
 export type CommitExpectation = {
@@ -69,7 +69,9 @@ function checkExpectations(document: ProjectDocument, expected: CommitExpectatio
   const liveResources = resources(document);
   for (const [key, value] of Object.entries(expected.entities)) {
     const current = liveEntities.get(key);
-    if (value.state === 'absent' ? Object.hasOwn(document.revisionLedger.entities, key) :
+    const watermark = document.revisionLedger.entities[key];
+    if (value.state === 'absent' ? watermark !== undefined :
+      value.state === 'tombstone' ? current !== undefined || watermark !== value.revision :
       current?.revision !== value.revision) throw new ConflictError('target-entity', key);
   }
   for (const [id, value] of Object.entries(expected.resources)) {
@@ -101,8 +103,10 @@ function checkTransition(current: ProjectDocument, next: ProjectDocument, expect
       entityLedger[key] = before!.revision + 1;
       continue;
     }
-    const revision = before ? before.revision + Number(changed) : 1;
-    invariant((before || !Object.hasOwn(entityLedger, key)) && after.revision === revision,
+    const restoration = expected.entities[key];
+    const restoring = key.startsWith('spriteAsset:') && !before && restoration?.state === 'tombstone';
+    const revision = before ? before.revision + Number(changed) : restoring ? restoration.revision + 1 : 1;
+    invariant((before || restoring || !Object.hasOwn(entityLedger, key)) && after.revision === revision,
       'Unexpected entity revision or reused ID: ' + key);
     entityLedger[key] = revision;
   }
@@ -135,7 +139,7 @@ function checkTransition(current: ProjectDocument, next: ProjectDocument, expect
     ];
     const revision = before
       ? before.contentVersion + Number(!sameValue(pixelState(before), pixelState(asset)))
-      : 1;
+      : expected.entities['spriteAsset:' + asset.id]?.state === 'tombstone' ? asset.revision : 1;
     invariant(asset.contentVersion === revision, 'Unexpected sprite content version: ' + asset.id);
   }
   return newVersions;
@@ -247,7 +251,7 @@ export class ProjectStore {
             const previous = await result<StoredResource | undefined>(binary.get([
               next.projectId, version.resourceId, restore.revision - 1
             ]));
-            if (record.raster?.kind !== 'mask' || previous?.raster?.kind !== 'mask' ||
+            if (!record.raster || !previous?.raster || previous.raster.kind !== record.raster.kind ||
                 previous.version.contentHash !== version.contentHash || previous.version.byteLength !== version.byteLength) {
               throw new ConflictError('resource', version.resourceId);
             }
@@ -307,7 +311,7 @@ export class ProjectStore {
       const current = await result<ProjectDocument | undefined>(tx.objectStore('projects').get(projectId));
       if (!current) return 0;
       validateProject(current);
-      const { pinnedMaskIds } = await this.#trimHistory(tx.objectStore('history'), projectId, now);
+      const { pinnedResourceIds } = await this.#trimHistory(tx.objectStore('history'), projectId, now);
       const live = resources(current);
       const binary = tx.objectStore('resources');
       const keys = await result(binary.getAllKeys(projectRange(projectId)));
@@ -318,7 +322,7 @@ export class ProjectStore {
         const { resourceId, revision } = record.version;
         const currentVersion = live.get(resourceId)?.version;
         if (currentVersion?.revision === revision ||
-          (!currentVersion && pinnedMaskIds.has(resourceId) && current.revisionLedger.resources[resourceId] === revision + 1)) continue;
+          (!currentVersion && pinnedResourceIds.has(resourceId) && current.revisionLedger.resources[resourceId] === revision + 1)) continue;
         if (record.retiredAt === undefined) await result(binary.put({ ...record, retiredAt: now }, key));
         else if (now - record.retiredAt >= lifetime) {
           await result(binary.delete(key));

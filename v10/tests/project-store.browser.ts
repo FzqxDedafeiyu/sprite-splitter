@@ -552,6 +552,62 @@ async function rasterCommandTests() {
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 
+async function spriteLifecycleTests() {
+  const db = 'sprite-v10-lifecycle-' + crypto.randomUUID();
+  const store = await ProjectStore.open(db);
+  try {
+    const project = createProject();
+    const pid = project.projectId;
+    await store.create(project);
+    const bus = new CommandBus(store, () => {});
+    const load = async () => (await store.load(pid))!.document;
+    const bytes = await png();
+    const first = await bus.dispatch(bus.prepareSpriteCreation(project, { name: '前景', category: 'terrain', png: bytes }));
+    if (!first.ok) throw new Error(first.error.cause);
+    const [id] = first.affectedIds;
+    const created = (await load()).assets[0];
+    equal([id, created.revision, created.rasterResource.revision], [created.id, 1, 1]);
+    equal((await bus.undo(pid)).ok, true);
+    equal((await load()).assets.length, 0);
+    await store.collectRetiredResources(pid, Date.now() + 25 * 60 * 60 * 1000);
+    equal((await bus.redo(pid)).ok, true);
+    const redone = (await load()).assets[0];
+    equal([redone.id, redone.revision, redone.rasterResource.resourceId, redone.rasterResource.revision],
+      [id, 3, created.rasterResource.resourceId, 3]);
+
+    const attached = await bus.dispatch(bus.prepareSpriteMaskAttachment(await load(), id,
+      encodeMask(2, 2, new Uint8Array([255, 0, 128, 64]))));
+    equal(attached.ok, true);
+    const second = await bus.dispatch(bus.prepareSpriteCreation(await load(), { name: '背景', category: 'terrain', png: bytes }));
+    if (!second.ok) throw new Error(second.error.cause);
+    const secondId = second.affectedIds[0];
+    const baseline = await load();
+    equal((await bus.dispatch(bus.prepareSpriteDeletion(baseline, id))).ok, true);
+    equal((await load()).assets.map(asset => asset.id), [secondId]);
+    await store.collectRetiredResources(pid, Date.now() + 25 * 60 * 60 * 1000);
+    equal((await bus.undo(pid)).ok, true);
+    const restored = await load();
+    equal(restored.assets.map(asset => asset.id), [id, secondId]);
+    equal(restored.assets[0].mask?.contentHash, baseline.assets[0].mask?.contentHash);
+    equal(restored.assets[0].mask?.revision, baseline.assets[0].mask!.revision + 2);
+    equal(restored.assets[0].contentVersion > baseline.assets[0].contentVersion, true);
+
+    const groupId = crypto.randomUUID();
+    const reference = structuredClone(restored);
+    reference.revision++;
+    reference.sceneGroups.push({ id: groupId, name: '图层组', memberSpriteIds: [id], revision: 1 });
+    reference.revisionLedger.entities['sceneGroup:' + groupId] = 1;
+    await store.commit(reference, { projectRevision: restored.revision,
+      entities: { ['sceneGroup:' + groupId]: { state: 'absent' } }, resources: {} });
+    let deleteRefused = false;
+    try { bus.prepareSpriteDeletion(reference, id); }
+    catch (error) { deleteRefused = String(error).includes('Detach scene and animation references'); }
+    equal(deleteRefused, true);
+    equal((await load()).revision, reference.revision);
+    return { createWithUndoRedo: 'pass', deleteWithMaskRestore: 'pass', referencedSpriteProtection: 'pass' };
+  } finally { store.close(); indexedDB.deleteDatabase(db); }
+}
+
 function historyBudgetTests() {
   const now = Date.now();
   const entry = (createdAt: number, bytes = 0) => ({ change: null, revision: 1, segment: 1, createdAt, bytes });
@@ -591,7 +647,7 @@ async function historySchemaUpgrade() {
   } finally { upgraded.close(); indexedDB.deleteDatabase(db); }
 }
 
-Promise.all([run(), commandTests(), rasterCommandTests(), historySchemaUpgrade()]).then(([fixture, commands, rasterCommands, historyUpgrade]) => {
-  const value = { ...fixture, commands, rasterCommands, historyUpgrade, projectHistoryBudget: historyBudgetTests() };
+Promise.all([run(), commandTests(), rasterCommandTests(), historySchemaUpgrade(), spriteLifecycleTests()]).then(([fixture, commands, rasterCommands, historyUpgrade, spriteLifecycle]) => {
+  const value = { ...fixture, commands, rasterCommands, historyUpgrade, spriteLifecycle, projectHistoryBudget: historyBudgetTests() };
   document.querySelector('#result')!.textContent = JSON.stringify(value); },
   error => { document.querySelector('#result')!.textContent = JSON.stringify({ test: { error: String(error.stack ?? error) } }); });

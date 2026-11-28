@@ -76,3 +76,7 @@ IndexedDB v2 增加按项目和 timeline ID 存储的 history 表。正式命令
 `collectRetiredResources(projectId)` 在单个写事务中清理项目内过期历史和已退休资源。现用版本不回收；历史仍需恢复已移除蒙版时，保留其 tombstone 之前最后一个版本。退休版本至少保留 24 小时。旧库未知退休时间的记录首次发现时开始计时。项目、素材和资源 revision 水位不因回收改变。此 API 已验证，正式编辑器还需决定触发回收的时机。
 
 Edge 已验证数据库关闭后重开、蒙版历史恢复、不同 timeline 隔离、项目 CAS 失败时历史不变、以及 v1 → v2 数据保留。
+
+### 素材创建和删除
+
+`prepareSpriteCreation` 原子写入新 Sprite 和 PNG，`prepareSpriteDeletion` 移除未被场景、组或动画引用且独立持有资源的素材。删除不级联移除依赖。撤销恢复原有顺序、Sprite ID、PNG 和蒙版 ID，并按 tombstone 继续推进版本。恢复使用最后一个活动版本的字节摘要，退休资源回收会保护仍被历史引用的 PNG 和蒙版。

@@ -35,18 +35,26 @@ export function trimProjectHistory(timelines: Timeline[], now: number) {
     count -= discarded.length;
     changed.add(timeline.id);
   }
-  const pinnedMaskIds = new Set<string>();
+  const pinnedResourceIds = new Set<string>();
+  const pin = (value: unknown) => {
+    if (value && typeof value === 'object' && 'resourceId' in value && typeof value.resourceId === 'string') {
+      pinnedResourceIds.add(value.resourceId);
+    }
+  };
   for (const { snapshot } of timelines) {
     for (const entry of [...snapshot.undo, ...snapshot.redo]) {
       const change = entry.change;
-      if (!change || typeof change !== 'object' || !('kind' in change) || change.kind !== 'mask-presence') continue;
+      if (!change || typeof change !== 'object' || !('kind' in change)) continue;
       for (const direction of ['undo', 'redo'] as const) {
         const edit = (change as Record<string, unknown>)[direction];
-        if (edit && typeof edit === 'object' && 'resourceId' in edit && typeof edit.resourceId === 'string') {
-          pinnedMaskIds.add(edit.resourceId);
+        if (change.kind === 'mask-presence') pin(edit);
+        else if (change.kind === 'sprite-presence' && edit && typeof edit === 'object') {
+          const binary = edit as Record<string, unknown>;
+          pin(binary.raster);
+          pin(binary.mask);
         }
       }
     }
   }
-  return { changed, pinnedMaskIds };
+  return { changed, pinnedResourceIds };
 }

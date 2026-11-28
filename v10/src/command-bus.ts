@@ -1,3 +1,4 @@
+import { applySpritePresence, newSpriteEdit, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
 import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
 import { applyRasterReplacement, findSprite, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
 import { SessionHistory, type HistoryDirection, type HistorySnapshot } from './session-history.ts';
@@ -53,7 +54,8 @@ type PropertyChanges = Map<string, PropertyPatch>;
 type HistoryChange =
   | { kind: 'properties'; undo: PropertyChanges; redo: PropertyChanges; bytes: 0 }
   | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number }
-  | { kind: 'mask-presence'; spriteId: string; undo: MaskPresenceEdit; redo: MaskPresenceEdit; bytes: number };
+  | { kind: 'mask-presence'; spriteId: string; undo: MaskPresenceEdit; redo: MaskPresenceEdit; bytes: number }
+  | { kind: 'sprite-presence'; spriteId: string; undo: SpritePresenceEdit; redo: SpritePresenceEdit; bytes: number };
 type Applied = { history: HistoryChange; stageId?: string };
 
 function applyProperties(document: ProjectDocument, changes: PropertyChanges): Extract<HistoryChange, { kind: 'properties' }> {
@@ -200,6 +202,40 @@ export class CommandBus {
       history: { kind: 'mask-presence', spriteId, undo: change.undo, redo: change.redo, bytes: change.bytes } };
   }
 
+  prepareSpriteCreation(snapshot: ProjectDocument, input: NewSprite): string {
+    return this.#prepareSpritePresence(snapshot, newSpriteEdit(input, snapshot.assets.length));
+  }
+
+  prepareSpriteDeletion(snapshot: ProjectDocument, spriteId: string): string {
+    return this.#prepareSpritePresence(snapshot, { kind: 'remove', spriteId });
+  }
+
+  #prepareSpritePresence(snapshot: ProjectDocument, edit: SpritePresenceEdit): string {
+    invariant(this.#plans.size < 128, 'Too many pending commands');
+    invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
+    const id = spritePresenceTarget(edit);
+    const operation: Operation = {
+      affectedIds: [id],
+      changes: { readEntities: [], writeEntities: [spriteKey(id)], resources: spritePresenceResources(snapshot, edit) },
+      rebase: 'never',
+      apply: (document, bytes) => this.#applySpritePresence(document, bytes, edit)
+    };
+    const commandId = crypto.randomUUID();
+    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
+      expectation: captureExpectations(snapshot, operation.changes) });
+    return commandId;
+  }
+
+  async #applySpritePresence(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
+    edit: SpritePresenceEdit): Promise<Applied> {
+    const stage = this.persistence.stage?.bind(this.persistence);
+    invariant(stage, 'This persistence adapter cannot stage resources');
+    const change = await applySpritePresence(document, existing, edit, { stage });
+    return { stageId: change.stageId,
+      history: { kind: 'sprite-presence', spriteId: spritePresenceTarget(edit),
+        undo: change.undo, redo: change.redo, bytes: change.bytes } };
+  }
+
   cancel(commandId: string): boolean { return this.#plans.delete(commandId); }
 
   async dispatch(commandId: string): Promise<CommandResult> {
@@ -238,20 +274,31 @@ export class CommandBus {
       document = snapshot.document;
       if (document.revision !== baseRevision) throw new ConflictError('project-cas', projectId);
       const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) :
-        change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) : [];
+        change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) :
+        change.kind === 'sprite-presence' ? spritePresenceResources(document, change[direction]) : [];
       const checks = captureExpectations(document, { readEntities: [], writeEntities: affectedIds.map(spriteKey),
         resources: resourceIds });
       let stageId: string | undefined;
       if (change.kind === 'properties') applyProperties(document, change[direction]);
       else if (change.kind === 'raster') {
         stageId = (await this.#applyRaster(document, snapshot.bytes, change.spriteId, change[direction])).stageId;
-      } else {
+      } else if (change.kind === 'mask-presence') {
         const edit = change[direction];
         if (edit.kind === 'attach' && edit.restore) {
           checks.resources[edit.resourceId] = { state: 'tombstone',
             revision: document.revisionLedger.resources[edit.resourceId] };
         }
         stageId = (await this.#applyMaskPresence(document, snapshot.bytes, change.spriteId, edit)).stageId;
+      } else {
+        const edit = change[direction];
+        if (edit.kind === 'attach' && edit.restore) {
+          const key = spriteKey(change.spriteId);
+          checks.entities[key] = { state: 'tombstone', revision: document.revisionLedger.entities[key] };
+          for (const resourceId of resourceIds) {
+            checks.resources[resourceId] = { state: 'tombstone', revision: document.revisionLedger.resources[resourceId] };
+          }
+        }
+        stageId = (await this.#applySpritePresence(document, snapshot.bytes, edit)).stageId;
       }
       document.revision++;
       history.complete(direction, document.revision);
