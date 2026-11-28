@@ -8,7 +8,7 @@ export type ChangeSet = {
   writeEntities: readonly string[];
   resources: readonly string[];
 };
-type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number; publishError?: string };
+type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number; publishError?: string; historyError?: string };
 type Failed = { ok: false; commandId: string; affectedIds: string[]; baseRevision: number | null; attemptedRevision: number | null; attempts: number;
   error: { code: string; message: string; retryable: boolean; cause?: string; conflict?: { kind: ConflictError['kind']; target: string } } };
 export type CommandResult = Committed | Failed;
@@ -46,6 +46,7 @@ type PropertyPatch = Partial<Pick<SpriteAsset, 'name' | 'category' | 'descriptio
 const propertyNames = new Set(['name', 'category', 'description', 'groupName']);
 const spriteKey = (id: string) => 'spriteAsset:' + id;
 
+type SpritePropertyChange = { spriteId: string; patch: PropertyPatch };
 type PropertyChanges = Map<string, PropertyPatch>;
 type PropertyHistory = { undo: PropertyChanges; redo: PropertyChanges };
 
@@ -82,18 +83,29 @@ export class CommandBus {
   constructor(private readonly persistence: Pick<ProjectStore, 'load' | 'commit'>,
     private readonly publish: (document: ProjectDocument) => void) {}
 
-  prepareSpriteProperties(snapshot: ProjectDocument, changes: readonly { spriteId: string; patch: PropertyPatch }[]): string {
+  prepareSpriteProperties(snapshot: ProjectDocument, changes: readonly SpritePropertyChange[]): string {
+    return this.prepareCompositeSpriteProperties(snapshot, [changes]);
+  }
+
+  prepareCompositeSpriteProperties(snapshot: ProjectDocument,
+    children: readonly (readonly SpritePropertyChange[])[]): string {
     invariant(this.#plans.size < 128, 'Too many pending commands');
-    const patches = new Map<string, PropertyPatch>();
-    for (const { spriteId, patch } of changes) {
-      invariant(!patches.has(spriteId), 'Duplicate sprite in property command: ' + spriteId);
-      const entries = Object.entries(patch);
-      invariant(entries.length && entries.every(([key, value]) => propertyNames.has(key) &&
-        (typeof value === 'string' || (value === null && key === 'groupName'))), 'Invalid sprite property patch');
-      invariant(snapshot.assets.some(asset => asset.id === spriteId), 'Unknown sprite: ' + spriteId);
-      patches.set(spriteId, { ...patch });
+    invariant(children.length, 'Composite command has no children');
+    const sprites = new Set(snapshot.assets.map(asset => asset.id));
+    const patches: PropertyChanges = new Map();
+    for (const child of children) {
+      invariant(child.length, 'Property command has no targets');
+      const childTargets = new Set<string>();
+      for (const { spriteId, patch } of child) {
+        invariant(!childTargets.has(spriteId), 'Duplicate sprite in property command: ' + spriteId);
+        const entries = Object.entries(patch);
+        invariant(entries.length && entries.every(([key, value]) => propertyNames.has(key) &&
+          (typeof value === 'string' || (value === null && key === 'groupName'))), 'Invalid sprite property patch');
+        invariant(sprites.has(spriteId), 'Unknown sprite: ' + spriteId);
+        childTargets.add(spriteId);
+        patches.set(spriteId, { ...patches.get(spriteId), ...patch });
+      }
     }
-    invariant(patches.size, 'Property command has no targets');
     const affectedIds = [...patches.keys()];
     const operation: Operation = {
       affectedIds,
@@ -154,7 +166,6 @@ export class CommandBus {
       document.revision++;
       attempts++;
       await this.persistence.commit(document, checks);
-      history.complete(direction, document.revision);
     } catch (error) {
       const conflict = error instanceof ConflictError ? { kind: error.kind, target: error.target } : undefined;
       return { ok: false, commandId, affectedIds, baseRevision: entry?.revision ?? null,
@@ -164,7 +175,7 @@ export class CommandBus {
             entry ? 'History update did not complete.' : 'There is no history entry to apply.',
           retryable: false, cause: String(error), conflict } };
     }
-    return this.#publish(commandId, affectedIds, document);
+    return this.#afterCommit(commandId, affectedIds, document, () => history!.complete(direction, document.revision));
   }
 
   async #execute(commandId: string, plan: Captured): Promise<CommandResult> {
@@ -173,6 +184,7 @@ export class CommandBus {
     let attemptedRevision: number | null = null;
     let attempts = 0;
     let committed: ProjectDocument;
+    let committedHistory: PropertyHistory;
     try {
       while (true) {
         const loaded = await this.persistence.load(projectId);
@@ -194,7 +206,7 @@ export class CommandBus {
           attempts++;
           attemptedRevision = checks.projectRevision;
           await this.persistence.commit(next, checks);
-          this.#historyFor(projectId).record(history, checks.projectRevision, next.revision);
+          committedHistory = history;
           committed = next;
           break;
         } catch (error) {
@@ -215,11 +227,18 @@ export class CommandBus {
       return { ok: false, commandId, affectedIds, baseRevision: expectation.projectRevision, attemptedRevision, attempts,
         error: { code, message, cause: String(error), retryable: code === 'project-cas', conflict } };
     }
-    return this.#publish(commandId, affectedIds, committed);
+    return this.#afterCommit(commandId, affectedIds, committed, () =>
+      this.#historyFor(projectId).record(committedHistory, committed.revision - 1, committed.revision));
   }
 
-  #publish(commandId: string, affectedIds: string[], committed: ProjectDocument): Committed {
+  #afterCommit(commandId: string, affectedIds: string[], committed: ProjectDocument,
+    recordHistory: () => void): Committed {
     const result: Committed = { ok: true, commandId, affectedIds, projectRevision: committed.revision };
+    try { recordHistory(); }
+    catch (error) {
+      this.#history.delete(committed.projectId);
+      result.historyError = String(error);
+    }
     try { this.publish(committed); }
     catch (error) { result.publishError = String(error); }
     return result;

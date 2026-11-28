@@ -320,7 +320,44 @@ async function commandTests() {
     equal((await historyBus.undo(project.projectId)).ok, true);
     const blocked = await historyBus.undo(project.projectId);
     equal(!blocked.ok && blocked.error.code, 'project-cas');
-    return { historyRoundTrip: 'pass', historyExternalConflict: 'pass', retrySucceedsAfterRebase: 'pass', pendingCap: 'pass', publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
+    const compositeBase = (await persistence.load(project.projectId))!.document;
+    const compositeBus = new CommandBus(persistence, () => {});
+    let invalidChild = false;
+    try {
+      compositeBus.prepareCompositeSpriteProperties(compositeBase, [
+        [{ spriteId: id, patch: { name: '不应写入' } }],
+        [{ spriteId: crypto.randomUUID(), patch: { name: '不存在' } }]
+      ]);
+    } catch (error) { invalidChild = String(error).includes('Unknown sprite'); }
+    equal(invalidChild, true);
+    equal((await persistence.load(project.projectId))?.document.revision, compositeBase.revision);
+    const composed = await compositeBus.dispatch(compositeBus.prepareCompositeSpriteProperties(compositeBase, [
+      [{ spriteId: id, patch: { name: '第一步', description: '组合说明' } }],
+      [{ spriteId: id, patch: { name: '第二步' } }, { spriteId: secondId, patch: { name: '第二素材' } }]
+    ]));
+    equal(composed.ok && composed.projectRevision, compositeBase.revision + 1);
+    const afterComposite = (await persistence.load(project.projectId))!.document;
+    equal(afterComposite.assets.map(asset => [asset.name, asset.revision]),
+      [['第二步', compositeBase.assets[0].revision + 1], ['第二素材', compositeBase.assets[1].revision + 1]]);
+    equal(afterComposite.assets[0].description, '组合说明');
+    equal((await compositeBus.undo(project.projectId)).ok, true);
+    const afterUndo = (await persistence.load(project.projectId))!.document;
+    equal(afterUndo.revision, compositeBase.revision + 2);
+    equal(afterUndo.assets.map(asset => [asset.name, asset.description, asset.revision]),
+      compositeBase.assets.map(asset => [asset.name, asset.description, asset.revision + 2]));
+    equal((await compositeBus.redo(project.projectId)).ok, true);
+    const afterRedo = (await persistence.load(project.projectId))!.document;
+    equal(afterRedo.assets.map(asset => [asset.name, asset.description, asset.revision]),
+      afterComposite.assets.map(asset => [asset.name, asset.description, asset.revision + 2]));
+
+    const noOpChild = compositeBus.prepareCompositeSpriteProperties(afterRedo, [
+      [{ spriteId: id, patch: { name: '有效子操作' } }],
+      [{ spriteId: secondId, patch: { name: afterRedo.assets[1].name } }]
+    ]);
+    equal((await compositeBus.dispatch(noOpChild)).ok, true);
+    equal((await compositeBus.undo(project.projectId)).ok, true);
+    equal((await persistence.load(project.projectId))?.document.assets[1].revision, afterRedo.assets[1].revision);
+    return { compositeAtomicity: 'pass', compositeUndoRedo: 'pass', compositeNoOpChild: 'pass', historyRoundTrip: 'pass', historyExternalConflict: 'pass', retrySucceedsAfterRebase: 'pass', pendingCap: 'pass', publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
   } finally { persistence.close(); indexedDB.deleteDatabase(db); }
 }
 
