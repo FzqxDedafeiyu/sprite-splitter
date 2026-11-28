@@ -1,8 +1,11 @@
+import { previewSourceProject } from '../src/source-project.ts';
+import { saveProjectDraft, type ProjectDraft } from '../src/project-draft.ts';
+import type { DetectionOptions } from '../src/v9-detection.ts';
 import { previewV9AgentAnnotations } from '../src/v9-agent.ts';
 import { CommandBus, type CommandResult } from '../src/command-bus.ts';
 import { ProjectStore } from '../src/project-store.ts';
 import { readV9Archive } from '../src/v9-archive.ts';
-import { previewV9Migration, saveV9Migration } from '../src/v9-migration.ts';
+import { previewV9Migration } from '../src/v9-migration.ts';
 import { exportV9Scene } from '../src/v9-export.ts';
 import type { MigrationWarning, ProjectDocument } from '../src/domain.ts';
 
@@ -30,9 +33,14 @@ const agentFile = element<HTMLInputElement>('agent-file');
 const applyAgent = element<HTMLButtonElement>('apply-agent');
 const cancelAgent = element<HTMLButtonElement>('cancel-agent');
 let agentPending: { document: ProjectDocument; preview: ReturnType<typeof previewV9AgentAnnotations> } | undefined;
+const sourceFile = element<HTMLInputElement>('source-file');
+const detectAgain = element<HTMLButtonElement>('detect-again');
+const detectionInputs = ['detect-mode', 'detect-alpha', 'detect-background', 'detect-area', 'detect-padding',
+  'detect-connectivity'].map(id => element<HTMLInputElement | HTMLSelectElement>(id));
+let sourceSelection: { bytes: Blob; filename: string } | undefined;
 let store: ProjectStore;
 let bus: CommandBus;
-let pending: Awaited<ReturnType<typeof previewV9Migration>> | undefined;
+let pending: ProjectDraft | undefined;
 let opened: Awaited<ReturnType<ProjectStore['load']>>;
 let selectedId: string | undefined;
 let previewUrl: string | undefined;
@@ -99,7 +107,9 @@ function say(text: string, error = false) {
 }
 
 function controls() {
-  zip.disabled = orphans.disabled = projects.disabled = !ready || busy;
+  sourceFile.disabled = zip.disabled = orphans.disabled = projects.disabled = !ready || busy;
+  detectAgain.disabled = !ready || busy || !sourceSelection;
+  for (const input of detectionInputs) input.disabled = !ready || busy;
   save.disabled = !ready || busy || !pending;
   const saved = ready && !busy && !pending && Boolean(opened);
   exportButton.disabled = !saved || !opened?.document.assets.length;
@@ -165,7 +175,7 @@ function render(warnings: readonly MigrationWarning[], skipped: number) {
   const name = project?.sourceImages[0]?.filename ?? '场景素材';
   element('summary').hidden = !project;
   element('summary-text').textContent = project ? [name,
-    skipped ? skipped + ' 条已隔离' : '', pending ? '迁移预览' : 'V10 本地项目'].filter(Boolean).join(' · ') : '';
+    skipped ? skipped + ' 条已隔离' : '', pending ? (project.migrationMetadata ? '迁移预览' : '识别预览') : 'V10 本地项目'].filter(Boolean).join(' · ') : '';
   const list = element('warnings');
   list.replaceChildren();
   element('report').hidden = warnings.length === 0;
@@ -212,9 +222,48 @@ async function openSaved(projectId: string) {
   agentPending = undefined;
   showAgentReview();
   opened = snapshot;
+  const source = snapshot.document.sourceImages[0];
+  const bytes = source?.resourceVersion && snapshot.bytes.get(source.resourceVersion.resourceId);
+  sourceSelection = bytes ? { bytes, filename: source.filename } : undefined;
   const metadata = snapshot.document.migrationMetadata;
   render(metadata?.warnings ?? [], metadata?.idMap.filter(item => item.status !== 'mapped').length ?? 0);
 }
+
+function detectionSettings(): DetectionOptions {
+  const value = (name: string) => element<HTMLInputElement>(name).valueAsNumber;
+  const mode = element<HTMLSelectElement>('detect-mode').value as DetectionOptions['requested'];
+  return { requested: mode, alphaThreshold: value('detect-alpha'), bgThreshold: value('detect-background'),
+    minArea: value('detect-area'), pad: value('detect-padding'),
+    conn: element<HTMLSelectElement>('detect-connectivity').value === '4' ? 4 : 8 };
+}
+
+async function detectSource(input: { bytes: Blob; filename: string }) {
+  const preview = await previewSourceProject(input.bytes, input.filename, detectionSettings());
+  sourceSelection = input;
+  pending = preview;
+  agentPending = undefined;
+  showAgentReview();
+  opened = { document: preview.project, bytes: preview.binaries, history: undefined };
+  projects.value = '';
+  render(preview.report.warnings, 0);
+  if (!preview.project.assets.length) say('源图已载入，但没有识别到素材。可以调整阈值或最小面积后重试。');
+  else {
+    const mode = preview.detectionMode === 'alpha' ? 'Alpha' : '浅色背景';
+    say('自动识别完成（' + mode + '）。请检查素材后保存为 V10 项目。');
+  }
+}
+
+sourceFile.addEventListener('change', () => {
+  const file = sourceFile.files?.[0];
+  if (!file) return;
+  void run('正在识别源图…', () => detectSource({ bytes: file, filename: file.name }))
+    .finally(() => { sourceFile.value = ''; });
+});
+
+detectAgain.addEventListener('click', () => {
+  const input = sourceSelection;
+  if (input) void run('正在重新识别源图…', () => detectSource(input));
+});
 
 zip.addEventListener('change', () => {
   const file = zip.files?.[0];
@@ -223,6 +272,7 @@ zip.addEventListener('change', () => {
   void run('正在检查 ZIP 和素材…', async () => {
     const archive = await readV9Archive(file);
     const preview = await previewV9Migration(archive.manifest, archive.files, { includeOrphans });
+    sourceSelection = undefined;
     pending = preview;
     agentPending = undefined;
     showAgentReview();
@@ -246,7 +296,7 @@ save.addEventListener('click', () => {
   const preview = pending;
   if (!preview) return;
   void run('正在保存 V10 项目…', async () => {
-    const id = await saveV9Migration(preview, store);
+    const id = await saveProjectDraft(preview, store);
     // Storage succeeded. Further view refresh must not offer a duplicate save.
     pending = undefined;
     await openSaved(id);
@@ -376,7 +426,7 @@ void (async () => {
     bus = new CommandBus(store, () => {}, timelineId());
     await refreshProjects();
     ready = true;
-    say('请选择 V9 场景 ZIP，或打开已保存项目。');
+    say('请选择 V9 场景 ZIP、源图，或打开已保存项目。');
   } catch (error) { say('无法打开浏览器本地存储：' + String(error), true); }
   finally { controls(); }
 })();

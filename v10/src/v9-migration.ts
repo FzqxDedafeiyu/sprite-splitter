@@ -2,7 +2,7 @@ import type { AgentAnnotation, MigrationMetadata, MigrationWarning, Point, Proje
   Rect, SceneLayout, SpriteAsset } from './domain.ts';
 import { inspectRaster } from './mask.ts';
 import { createProject, invariant, safeAssetPath, validateProject } from './project.ts';
-import { resourceHash, type ProjectStore } from './project-store.ts';
+import { resourceHash } from './project-store.ts';
 
 type Json = Record<string, unknown>;
 type Candidate = { raw: Json; legacyId: string; path: string; index?: number; ordinal: number };
@@ -248,16 +248,4 @@ export async function previewV9Migration(input: unknown, files: ReadonlyMap<stri
   return { project, binaries, report: { imported: project.assets.length, quarantined, warnings } };
 }
 
-// Persist only after the caller accepts the preview; the original ZIP is untouched.
-export async function saveV9Migration(preview: Awaited<ReturnType<typeof previewV9Migration>>,
-  store: Pick<ProjectStore, 'create' | 'createImportedProject' | 'stage'>) {
-  const project = structuredClone(preview.project);
-  const input = Array.from(preview.binaries, ([resourceId, bytes]) => ({ resourceId, revision: 1, bytes }));
-  if (!input.length) {
-    await store.create(project);
-    return project.projectId;
-  }
-  const stage = await store.stage(project.projectId, input);
-  await store.createImportedProject(project, stage.id);
-  return project.projectId;
-}
+export { saveProjectDraft as saveV9Migration } from './project-draft.ts';

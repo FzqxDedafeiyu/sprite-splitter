@@ -292,7 +292,49 @@ try {
   const downloaded = await waitFor(async () => (await readdir(profile)).find(name => name.endsWith('-v9.zip')), 'downloaded V9 archive');
   const output = await readFile(join(profile, downloaded));
   if (output.length < 22 || output.readUInt32LE(0) !== 0x04034b50) throw new Error('Invalid workbench download');
-  const workbench = { agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const sourcePng = await app.evaluate('(' + (() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 50;
+    canvas.height = 26;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'red';
+    ctx.fillRect(4, 5, 12, 12);
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(34, 5, 12, 12);
+    return canvas.toDataURL().split(',')[1];
+  }).toString() + ')()');
+  const sourcePath = join(profile, 'two-sprites.png');
+  await writeFile(sourcePath, Buffer.from(sourcePng, 'base64'));
+  await app.selectFile('#source-file', sourcePath);
+  await waitFor(async () => (await appStatus())?.includes('自动识别完成（Alpha）'), 'source image detection');
+  if (await countLabel() !== '2 个') throw new Error('Unexpected source detection asset count');
+  const sourceIds = await app.evaluate('Array.from(document.querySelectorAll("#sprites button"), button => button.dataset.spriteId)');
+  if (new Set(sourceIds).size !== 2 || !(await app.evaluate('document.querySelector("#selection").textContent.includes("20 × 20 px")'))) {
+    throw new Error('Incorrect source crop dimensions or identity');
+  }
+  await app.evaluate('document.querySelector("#save").click()');
+  await waitFor(async () => (await appStatus())?.includes('已保存为 V10'), 'source project save');
+  const sourceProjectId = await app.evaluate('document.querySelector("#projects").value');
+  if (!sourceProjectId || sourceProjectId === savedProjectId) throw new Error('Source did not save as a separate project');
+  await app.reload();
+  await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'source workbench reload');
+  await app.evaluate('(' + ((id) => {
+    const select = document.querySelector('#projects');
+    select.value = id;
+    select.dispatchEvent(new Event('change'));
+  }).toString() + ')(' + JSON.stringify(sourceProjectId) + ')');
+  await waitFor(async () => (await appStatus())?.includes('已打开 V10'), 'source project reopen');
+  if (await countLabel() !== '2 个' ||
+    await app.evaluate('document.querySelector("#sprites button").dataset.spriteId') !== sourceIds[0]) {
+    throw new Error('Source project did not persist its sprites');
+  }
+  await app.evaluate('document.querySelector("#detect-area").value = 200; document.querySelector("#detect-again").click()');
+  await waitFor(async () => (await appStatus())?.includes('没有识别到素材'), 'source rerun with updated settings');
+  if (await countLabel() !== '0 个' || await app.evaluate('document.querySelector("#projects").value')) {
+    throw new Error('Source rerun overwrote the saved selection instead of opening a new draft');
+  }
+
+  const workbench = { sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);
