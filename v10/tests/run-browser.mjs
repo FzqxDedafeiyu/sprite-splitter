@@ -301,6 +301,8 @@ try {
     ctx.fillRect(4, 5, 12, 12);
     ctx.fillStyle = 'blue';
     ctx.fillRect(34, 5, 12, 12);
+    ctx.fillStyle = 'lime';
+    ctx.fillRect(1, 6, 1, 1);
     return canvas.toDataURL().split(',')[1];
   }).toString() + ')()');
   const sourcePath = join(profile, 'two-sprites.png');
@@ -328,13 +330,54 @@ try {
     await app.evaluate('document.querySelector("#sprites button").dataset.spriteId') !== sourceIds[0]) {
     throw new Error('Source project did not persist its sprites');
   }
+  await app.evaluate('document.querySelector("#source-crop").open = true; document.querySelector("#crop-surface").scrollIntoView({ block: "center" })');
+  const cropSurface = await waitFor(() => app.evaluate('(' + (() => {
+    if (!document.querySelector('#crop-image').naturalWidth) return null;
+    const { x, y, width, height } = document.querySelector('#crop-surface').getBoundingClientRect();
+    return width && height ? { x, y, width, height } : null;
+  }).toString() + ')()'), 'visible source crop surface');
+  const pointer = (type, x, y, buttons) => app.mouse({
+    type, x: cropSurface.x + x / 50 * cropSurface.width, y: cropSurface.y + y / 26 * cropSurface.height,
+    button: 'left', buttons, clickCount: 1
+  });
+  await pointer('mousePressed', 19, 21, 1);
+  await pointer('mouseMoved', 1, 3, 1);
+  await pointer('mouseReleased', 1, 3, 0);
+  const cropValues = () => app.evaluate('["x","y","w","h"].map(id => document.querySelector("#crop-" + id).valueAsNumber)');
+  if (String(await cropValues()) !== '1,3,18,18') throw new Error('Source pointer rectangle was mapped incorrectly');
+  if (!await app.evaluate('document.querySelector("#selection").textContent.includes("20 × 20 px")')) {
+    throw new Error('Pointer draft changed pixels before it was saved');
+  }
+  await app.evaluate('document.querySelector("#crop-w").value = 70; document.querySelector("#crop-form").requestSubmit()');
+  await waitFor(async () => (await appStatus())?.includes('裁切框必须在源图范围内'), 'out-of-bounds crop rejection');
+  await app.evaluate('document.querySelector("#crop-w").value = 18; document.querySelector("#crop-form").requestSubmit()');
+  await waitFor(async () => (await appStatus()) === '裁切框已保存。', 'source crop commit');
+  const cropMatches = () => app.evaluate('(' + (async () => {
+    const image = document.querySelector('#image');
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0);
+    return canvas.width === 18 && canvas.height === 18 && ctx.getImageData(0, 3, 1, 1).data[3] === 0 &&
+      ctx.getImageData(3, 2, 1, 1).data[3] === 255;
+  }).toString() + ')()');
+  if (!await cropMatches()) throw new Error('Manual crop lost the prior segmentation in the overlap');
+  await app.evaluate('document.querySelector("#undo").click()');
+  await waitFor(async () => (await appStatus()) === '已撤销。', 'source crop undo');
+  if (String(await cropValues()) !== '0,1,20,20') throw new Error('Crop undo did not restore source bounds');
+  await app.evaluate('document.querySelector("#redo").click()');
+  await waitFor(async () => (await appStatus()) === '已重做。', 'source crop redo');
+  if (!await cropMatches()) throw new Error('Crop redo lost pixels');
+
   await app.evaluate('document.querySelector("#detect-area").value = 200; document.querySelector("#detect-again").click()');
   await waitFor(async () => (await appStatus())?.includes('没有识别到素材'), 'source rerun with updated settings');
   if (await countLabel() !== '0 个' || await app.evaluate('document.querySelector("#projects").value')) {
     throw new Error('Source rerun overwrote the saved selection instead of opening a new draft');
   }
 
-  const workbench = { sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const workbench = { sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);

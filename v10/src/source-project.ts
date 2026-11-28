@@ -22,7 +22,9 @@ export async function openSourceBitmap(input: Blob) {
   return { format, bitmap };
 }
 
-export async function cropSourcePng(bitmap: ImageBitmap, rect: Rect, mask?: Uint8Array) {
+type CropOptions = { mask?: Uint8Array; preserve?: { rect: Rect; bytes: Blob } };
+
+export async function cropSourcePng(bitmap: ImageBitmap, rect: Rect, { mask, preserve }: CropOptions = {}) {
   const { x, y, width, height } = rect;
   invariant([x, y, width, height].every(Number.isSafeInteger) && x >= 0 && y >= 0 &&
     width > 0 && height > 0 && x + width <= bitmap.width && y + height <= bitmap.height &&
@@ -31,6 +33,23 @@ export async function cropSourcePng(bitmap: ImageBitmap, rect: Rect, mask?: Uint
   const context = canvas.getContext('2d', { willReadFrequently: Boolean(mask) });
   invariant(context, '浏览器无法创建裁切画布。');
   context.drawImage(bitmap, x, y, width, height, 0, 0, width, height);
+  if (preserve) {
+    const previous = preserve.rect;
+    const left = Math.max(x, previous.x), top = Math.max(y, previous.y);
+    const overlapWidth = Math.min(x + width, previous.x + previous.width) - left;
+    const overlapHeight = Math.min(y + height, previous.y + previous.height) - top;
+    if (overlapWidth > 0 && overlapHeight > 0) {
+      const raster = await createImageBitmap(preserve.bytes);
+      try {
+        invariant(raster.width === previous.width && raster.height === previous.height,
+          '现有裁切图尺寸与源图坐标不一致。');
+        const dx = left - x, dy = top - y;
+        context.clearRect(dx, dy, overlapWidth, overlapHeight);
+        context.drawImage(raster, left - previous.x, top - previous.y, overlapWidth, overlapHeight,
+          dx, dy, overlapWidth, overlapHeight);
+      } finally { raster.close(); }
+    }
+  }
   if (mask) {
     const pixels = context.getImageData(0, 0, width, height);
     for (let index = 0; index < mask.length; index++) if (!mask[index]) pixels.data[index * 4 + 3] = 0;
@@ -78,7 +97,7 @@ export async function previewSourceProject(input: Blob, filename: string, settin
     project.sceneLayout.world = { ...project.sceneLayout.world, width, height };
     for (const [index, item] of detected.sprites.entries()) {
       const sourceRect = { x: item.x, y: item.y, width: item.width, height: item.height };
-      const png = await cropSourcePng(bitmap, sourceRect, item.mask);
+      const png = await cropSourcePng(bitmap, sourceRect, { mask: item.mask });
       const rasterResource = await addResource(png);
       const id = crypto.randomUUID();
       const suffix = String(index + 1).padStart(3, '0');

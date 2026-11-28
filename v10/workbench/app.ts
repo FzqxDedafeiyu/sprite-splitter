@@ -1,4 +1,6 @@
-import { previewSourceProject } from '../src/source-project.ts';
+import { cropSourcePng, openSourceBitmap, previewSourceProject } from '../src/source-project.ts';
+import { sameValue } from '../src/project.ts';
+import { bindCropEditor } from './crop-editor.ts';
 import { saveProjectDraft, type ProjectDraft } from '../src/project-draft.ts';
 import type { DetectionOptions } from '../src/v9-detection.ts';
 import { previewV9AgentAnnotations } from '../src/v9-agent.ts';
@@ -7,7 +9,7 @@ import { ProjectStore } from '../src/project-store.ts';
 import { readV9Archive } from '../src/v9-archive.ts';
 import { previewV9Migration } from '../src/v9-migration.ts';
 import { exportV9Scene } from '../src/v9-export.ts';
-import type { MigrationWarning, ProjectDocument } from '../src/domain.ts';
+import type { MigrationWarning, ProjectDocument, Rect, SpriteAsset } from '../src/domain.ts';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 const zip = element<HTMLInputElement>('zip');
@@ -46,6 +48,7 @@ let selectedId: string | undefined;
 let previewUrl: string | undefined;
 let busy = false;
 let ready = false;
+const cropEditor = bindCropEditor(applyCrop);
 
 function timelineId() {
   const key = 'sprite-v10-workbench-history';
@@ -79,6 +82,38 @@ async function applyCommand(projectId: string, operation: () => Promise<CommandR
   try { await openSaved(projectId); }
   catch { say('修改已保存，但界面未能刷新。请选择「重新读取」。', true); return; }
   say(done);
+}
+
+function sourceFor(asset?: SpriteAsset) {
+  const source = opened?.document.sourceImages.find(item => item.id === asset?.sourceImageId);
+  const version = source?.resourceVersion;
+  const bytes = version && opened?.bytes.get(version.resourceId);
+  if (!source || source.width === undefined || source.height === undefined || !version || !bytes) return undefined;
+  return { key: version.resourceId + '@' + version.contentHash, bytes, width: source.width, height: source.height };
+}
+
+function applyCrop(rect: Rect) {
+  const current = opened;
+  const asset = current?.document.assets.find(item => item.id === selectedId);
+  const source = sourceFor(asset);
+  const original = asset?.sourceRect;
+  const previous = asset && current?.bytes.get(asset.rasterResource.resourceId);
+  if (pending || !current || !asset || !source || !original || !previous) return;
+  if (![rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) ||
+    rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 ||
+    rect.x + rect.width > source.width || rect.y + rect.height > source.height) {
+    say('裁切框必须在源图范围内，宽高至少为 1 像素。', true);
+    return;
+  }
+  if (sameValue(rect, original)) { say('裁切框没有变化。'); return; }
+  void run('正在裁切素材…', async () => {
+    const { bitmap } = await openSourceBitmap(source.bytes);
+    try {
+      const png = await cropSourcePng(bitmap, rect, { preserve: { rect: original, bytes: previous } });
+      const command = bus.prepareSpriteCrop(current.document, asset.id, rect, png);
+      await applyCommand(current.document.projectId, () => bus.dispatch(command), '裁切框已保存。');
+    } finally { bitmap.close(); }
+  });
 }
 
 function showAgentReview() {
@@ -119,6 +154,7 @@ function controls() {
   cancelAgent.disabled = !saved || !agentPending;
   undo.disabled = !saved || !historyAvailable('undo');
   redo.disabled = !saved || !historyAvailable('redo');
+  cropEditor.setEnabled(saved && Boolean(selectedId));
   element<HTMLFieldSetElement>('metadata-fields').disabled = !saved || !selectedId;
   element<HTMLFieldSetElement>('scene-fields').disabled = !saved || !selectedId ||
     !opened?.document.sceneLayout.items[selectedId];
@@ -166,6 +202,8 @@ function showPreview(id?: string) {
   sceneZ.value = scene ? String(scene.zIndex) : '';
   sceneVisible.checked = scene?.visible ?? false;
   sceneLocked.checked = scene?.locked ?? false;
+  cropEditor.select(pending ? undefined : sourceFor(asset),
+    asset?.sourceRectStatus === 'known' ? asset.sourceRect : undefined);
   controls();
 }
 
