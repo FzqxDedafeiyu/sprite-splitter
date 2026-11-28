@@ -1,4 +1,4 @@
-import type { ProjectDocument, ResourceVersion } from './domain.ts';
+import type { CalibrationSource, PivotPreset, Point, ProjectDocument, ResourceVersion } from './domain.ts';
 
 export class IntegrityError extends Error {}
 type Versioned = { revision: number };
@@ -89,6 +89,57 @@ export function resources(document: ProjectDocument) {
   return result;
 }
 
+const pivotStrategies = new Set<PivotPreset['strategy']>([
+  'bbox_center', 'alpha_centroid', 'bottom_center', 'bottom_contact', 'semantic_point', 'custom'
+]);
+const committedCalibrationSources = new Set<CalibrationSource>([
+  'default', 'geometry_auto', 'manual', 'accepted_ai', 'imported'
+]);
+const finitePoint = (point: Point | undefined) => point && Number.isFinite(point.x) && Number.isFinite(point.y);
+const unit = (value: number) => Number.isFinite(value) && value >= 0 && value <= 1;
+
+function validateAnimations(document: ProjectDocument, sprites: Set<string>) {
+  const membersBySet = new Map<string, Set<string>>();
+  for (const set of document.animationSets) {
+    const members = new Set(set.spriteIds);
+    invariant((set.assetType === 'character' || set.assetType === 'object') &&
+      typeof set.name === 'string' && set.name.trim().length > 0 &&
+      members.size === set.spriteIds.length && set.spriteIds.every(id => sprites.has(id)),
+      'Invalid animation set: ' + set.id);
+    membersBySet.set(set.id, members);
+  }
+
+  const presets = new Map(document.pivotPresets.map(preset => [preset.id, preset]));
+  for (const preset of presets.values()) {
+    const point = preset.normalizedPoint;
+    invariant(typeof preset.name === 'string' && preset.name.trim().length > 0 &&
+      ['character', 'object', 'both'].includes(preset.assetType) &&
+      Array.isArray(preset.actionTypes) && preset.actionTypes.every(action => typeof action === 'string') &&
+      pivotStrategies.has(preset.strategy) && (point === undefined || (point && unit(point.x) && unit(point.y))),
+      'Invalid pivot preset: ' + preset.id);
+  }
+
+  for (const clip of document.animationClips) {
+    const members = membersBySet.get(clip.setId);
+    invariant(members && presets.has(clip.pivotPresetId), 'Unknown animation set or preset: ' + clip.id);
+    invariant(typeof clip.name === 'string' && clip.name.trim().length > 0 &&
+      typeof clip.actionType === 'string' && Number.isFinite(clip.fps) && clip.fps > 0 &&
+      typeof clip.loop === 'boolean' && clip.canvas &&
+      dimension(clip.canvas.width) && dimension(clip.canvas.height) && finitePoint(clip.pivotTarget),
+      'Invalid animation clip: ' + clip.id);
+    for (const frame of clip.frames) {
+      invariant(members.has(frame.spriteId) && !sprites.has(frame.id), 'Invalid animation frame identity: ' + frame.id);
+      const alignment = frame.alignment;
+      invariant(Number.isFinite(frame.duration) && frame.duration > 0 && alignment &&
+        finitePoint(alignment.pivotLocal) && finitePoint(alignment.offset) &&
+        committedCalibrationSources.has(alignment.pivotSource) && committedCalibrationSources.has(alignment.offsetSource) &&
+        (alignment.locked === undefined || typeof alignment.locked === 'boolean') &&
+        (alignment.confidence === undefined || unit(alignment.confidence)),
+        'Invalid animation frame timing or alignment: ' + frame.id);
+    }
+  }
+}
+
 export function validateProject(document: ProjectDocument) {
   invariant(document.kind === 'sprite-project' && document.projectSchemaVersion === 10 &&
     uuidPattern.test(document.projectId) && validRevision(document.revision), 'Invalid project header');
@@ -126,14 +177,7 @@ export function validateProject(document: ProjectDocument) {
     sprite(item.spriteId);
     Object.values(item.relations).forEach(ids => ids.forEach(sprite));
   }
-  for (const set of document.animationSets) set.spriteIds.forEach(sprite);
-  for (const clip of document.animationClips) {
-    invariant(sets.has(clip.setId) && presets.has(clip.pivotPresetId), 'Unknown animation set or preset');
-    for (const frame of clip.frames) {
-      sprite(frame.spriteId);
-      invariant(!sprites.has(frame.id), 'Frame ID conflicts with a sprite ID');
-    }
-  }
+  validateAnimations(document, sprites);
 }
 
 export function createProject(projectId = crypto.randomUUID()): ProjectDocument {
