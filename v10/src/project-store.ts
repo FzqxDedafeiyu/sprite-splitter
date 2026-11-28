@@ -3,7 +3,7 @@ import { entities, invariant, resources, sameValue, validateProject } from './pr
 import { inspectRaster } from './mask.ts';
 
 type Expectation = { state: 'absent' } | { state: 'present'; revision: number };
-type ResourceExpectation = { state: 'absent' } |
+type ResourceExpectation = { state: 'absent' } | { state: 'tombstone'; revision: number } |
   { state: 'present'; revision: number; contentHash: string };
 export type CommitExpectation = {
   projectRevision: number;
@@ -67,7 +67,9 @@ function checkExpectations(document: ProjectDocument, expected: CommitExpectatio
   }
   for (const [id, value] of Object.entries(expected.resources)) {
     const current = liveResources.get(id)?.version;
-    if (value.state === 'absent' ? Object.hasOwn(document.revisionLedger.resources, id) :
+    const watermark = document.revisionLedger.resources[id];
+    if (value.state === 'absent' ? watermark !== undefined :
+      value.state === 'tombstone' ? current !== undefined || watermark !== value.revision :
       current?.revision !== value.revision || current.contentHash !== value.contentHash) {
       throw new ConflictError('resource', id);
     }
@@ -107,8 +109,10 @@ function checkTransition(current: ProjectDocument, next: ProjectDocument, expect
       resourceLedger[id] = before!.revision + 1;
       continue;
     }
-    const revision = before ? before.revision + Number(changed) : 1;
-    invariant((before || !Object.hasOwn(resourceLedger, id)) && after.revision === revision &&
+    const restoration = expected.resources[id];
+    const restoring = !before && restoration?.state === 'tombstone';
+    const revision = before ? before.revision + Number(changed) : restoring ? restoration.revision + 1 : 1;
+    invariant((before || restoring || !Object.hasOwn(resourceLedger, id)) && after.revision === revision &&
       (changed || sameValue(before, after)), 'Unexpected resource version or reused ID: ' + id);
     if (changed) newVersions.push(after);
     resourceLedger[id] = revision;
@@ -223,7 +227,18 @@ export class ProjectStore {
           if (!record || !sameValue(record.version, version) || record.bytes.size !== version.byteLength) {
             throw new ConflictError('resource', version.resourceId);
           }
-          await result(tx.objectStore('resources').add(record, resourceKey(next.projectId, version)));
+          const binary = tx.objectStore('resources');
+          const restore = expected.resources[version.resourceId];
+          if (restore?.state === 'tombstone') {
+            const previous = await result<StoredResource | undefined>(binary.get([
+              next.projectId, version.resourceId, restore.revision - 1
+            ]));
+            if (record.raster?.kind !== 'mask' || previous?.raster?.kind !== 'mask' ||
+                previous.version.contentHash !== version.contentHash || previous.version.byteLength !== version.byteLength) {
+              throw new ConflictError('resource', version.resourceId);
+            }
+          }
+          await result(binary.add(record, resourceKey(next.projectId, version)));
         }
         const binary = tx.objectStore('resources');
         for (const sprite of next.assets) {

@@ -458,7 +458,54 @@ async function rasterCommandTests() {
     await verifyCrop(withRect.assets[0].sourceRect!, withRect.assets[0].points!, [4, 3, 2, 1], 2);
     equal((await bus.redo(blank.projectId)).ok, true);
     await verifyCrop(crop, shifted, [255, 4, 3, 255, 2, 1], 3);
-    return { cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
+    const beforeRemoval = (await store.load(blank.projectId))!.document;
+    const remove = bus.prepareSpriteMaskRemoval(beforeRemoval, id);
+    equal((await bus.dispatch(remove)).ok, true);
+    const removed = (await store.load(blank.projectId))!;
+    equal(removed.document.assets[0].mask, undefined);
+    equal(removed.bytes.has(maskId), false);
+    const tombstone = removed.document.revisionLedger.resources[maskId];
+    equal(tombstone, beforeRemoval.assets[0].mask!.revision + 1);
+
+    const forged = await store.stage(blank.projectId, [
+      { resourceId: maskId, revision: tombstone + 1, bytes: encodeMask(3, 2, new Uint8Array(6)) }
+    ]);
+    const falseRestore = structuredClone(removed.document);
+    falseRestore.revision++;
+    falseRestore.assets[0].revision++;
+    falseRestore.assets[0].contentVersion++;
+    falseRestore.assets[0].mask = { ...beforeRemoval.assets[0].mask!, ...forged.versions[0] };
+    falseRestore.revisionLedger.entities[key]++;
+    falseRestore.revisionLedger.resources[maskId]++;
+    const restoreExpectation = { projectRevision: removed.document.revision,
+      entities: { [key]: { state: 'present' as const, revision: removed.document.assets[0].revision } },
+      resources: { [maskId]: { state: 'tombstone' as const, revision: tombstone } } };
+    await rejects(store.commit(falseRestore, restoreExpectation, forged.id), error =>
+      error instanceof ConflictError && error.kind === 'resource');
+    equal((await store.load(blank.projectId))?.document.revision, removed.document.revision);
+    equal(await store.collectExpiredStages(Date.now() + 24 * 60 * 60 * 1000), 0);
+
+    equal((await bus.undo(blank.projectId)).ok, true);
+    const restored = (await store.load(blank.projectId))!;
+    equal(restored.document.assets[0].mask?.revision, tombstone + 1);
+    equal(restored.document.assets[0].mask?.contentHash, beforeRemoval.assets[0].mask?.contentHash);
+    equal((await bus.redo(blank.projectId)).ok, true);
+
+    const blankMask = (await store.load(blank.projectId))!.document;
+    const wrongSize = bus.prepareSpriteMaskAttachment(blankMask, id, encodeMask(1, 1, new Uint8Array([0])));
+    equal((await bus.dispatch(wrongSize)).ok, false);
+    const attach = bus.prepareSpriteMaskAttachment(blankMask, id, encodeMask(3, 2, new Uint8Array([0, 1, 2, 3, 4, 5])));
+    equal((await bus.dispatch(attach)).ok, true);
+    const newAttachment = (await store.load(blank.projectId))!.document.assets[0].mask!;
+    equal(newAttachment.revision, 1);
+    equal(newAttachment.resourceId === maskId, false);
+    equal((await bus.undo(blank.projectId)).ok, true);
+    equal((await store.load(blank.projectId))?.document.assets[0].mask, undefined);
+    equal((await bus.redo(blank.projectId)).ok, true);
+    const reattached = (await store.load(blank.projectId))!.document.assets[0].mask!;
+    equal([reattached.resourceId, reattached.revision, reattached.contentHash],
+      [newAttachment.resourceId, 3, newAttachment.contentHash]);
+    return { maskPresenceHistory: 'pass', maskTombstoneProtection: 'pass', cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 

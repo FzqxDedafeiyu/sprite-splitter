@@ -1,4 +1,5 @@
-import { applyRasterReplacement, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
+import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
+import { applyRasterReplacement, findSprite, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
 import { SessionHistory, type HistoryDirection } from './session-history.ts';
 import type { ProjectDocument, Rect, SpriteAsset } from './domain.ts';
 import { entities, invariant, resources, sameValue } from './project.ts';
@@ -51,7 +52,8 @@ type SpritePropertyChange = { spriteId: string; patch: PropertyPatch };
 type PropertyChanges = Map<string, PropertyPatch>;
 type HistoryChange =
   | { kind: 'properties'; undo: PropertyChanges; redo: PropertyChanges; bytes: 0 }
-  | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number };
+  | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number }
+  | { kind: 'mask-presence'; spriteId: string; undo: MaskPresenceEdit; redo: MaskPresenceEdit; bytes: number };
 type Applied = { history: HistoryChange; stageId?: string };
 
 function applyProperties(document: ProjectDocument, changes: PropertyChanges): Extract<HistoryChange, { kind: 'properties' }> {
@@ -158,6 +160,44 @@ export class CommandBus {
       history: { kind: 'raster', spriteId, undo: change.undo, redo: change.redo, bytes: change.bytes } };
   }
 
+  prepareSpriteMaskAttachment(snapshot: ProjectDocument, spriteId: string, bytes: Blob): string {
+    const resourceId = crypto.randomUUID();
+    return this.#prepareMaskPresence(snapshot, spriteId, {
+      kind: 'attach', resourceId, assetRef: 'masks/' + resourceId + '.ssm', bytes
+    });
+  }
+
+  prepareSpriteMaskRemoval(snapshot: ProjectDocument, spriteId: string): string {
+    const mask = findSprite(snapshot, spriteId).mask;
+    invariant(mask, 'Sprite has no mask');
+    return this.#prepareMaskPresence(snapshot, spriteId, { kind: 'remove', resourceId: mask.resourceId });
+  }
+
+  #prepareMaskPresence(snapshot: ProjectDocument, spriteId: string, edit: MaskPresenceEdit): string {
+    invariant(this.#plans.size < 128, 'Too many pending commands');
+    invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
+    const operation: Operation = {
+      affectedIds: [spriteId],
+      changes: { readEntities: [], writeEntities: [spriteKey(spriteId)],
+        resources: getMaskEditResources(snapshot, spriteId, edit) },
+      rebase: 'never',
+      apply: (document, bytes) => this.#applyMaskPresence(document, bytes, spriteId, edit)
+    };
+    const commandId = crypto.randomUUID();
+    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
+      expectation: captureExpectations(snapshot, operation.changes) });
+    return commandId;
+  }
+
+  async #applyMaskPresence(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
+    spriteId: string, edit: MaskPresenceEdit): Promise<Applied> {
+    const stage = this.persistence.stage?.bind(this.persistence);
+    invariant(stage, 'This persistence adapter cannot stage resources');
+    const change = await applyMaskPresence(document, existing, spriteId, edit, { stage });
+    return { stageId: change.stageId,
+      history: { kind: 'mask-presence', spriteId, undo: change.undo, redo: change.redo, bytes: change.bytes } };
+  }
+
   cancel(commandId: string): boolean { return this.#plans.delete(commandId); }
 
   async dispatch(commandId: string): Promise<CommandResult> {
@@ -191,7 +231,7 @@ export class CommandBus {
     const history = this.#history.get(projectId);
     const entry = history?.peek(direction);
     const change = entry?.change;
-    const affectedIds = !change ? [] : change.kind === 'raster' ? [change.spriteId] : [...change[direction].keys()];
+    const affectedIds = !change ? [] : change.kind === 'properties' ? [...change[direction].keys()] : [change.spriteId];
     let attempts = 0;
     let document: ProjectDocument;
     try {
@@ -200,12 +240,22 @@ export class CommandBus {
       invariant(snapshot, 'Project no longer exists');
       document = snapshot.document;
       if (document.revision !== entry.revision) throw new ConflictError('project-cas', projectId);
-      const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) : [];
+      const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) :
+        change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) : [];
       const checks = captureExpectations(document, { readEntities: [], writeEntities: affectedIds.map(spriteKey),
         resources: resourceIds });
       let stageId: string | undefined;
       if (change.kind === 'properties') applyProperties(document, change[direction]);
-      else stageId = (await this.#applyRaster(document, snapshot.bytes, change.spriteId, change[direction])).stageId;
+      else if (change.kind === 'raster') {
+        stageId = (await this.#applyRaster(document, snapshot.bytes, change.spriteId, change[direction])).stageId;
+      } else {
+        const edit = change[direction];
+        if (edit.kind === 'attach' && edit.restore) {
+          checks.resources[edit.resourceId] = { state: 'tombstone',
+            revision: document.revisionLedger.resources[edit.resourceId] };
+        }
+        stageId = (await this.#applyMaskPresence(document, snapshot.bytes, change.spriteId, edit)).stageId;
+      }
       document.revision++;
       attempts++;
       await this.persistence.commit(document, checks, stageId);

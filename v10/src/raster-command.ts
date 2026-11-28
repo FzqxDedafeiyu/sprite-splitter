@@ -21,7 +21,7 @@ export function rasterVersion(sprite: SpriteAsset, kind: RasterKind) {
   return version;
 }
 
-function verifyOwnership(document: ProjectDocument, resourceId: string) {
+export function verifyOwnership(document: ProjectDocument, resourceId: string) {
   let owners = 0;
   for (const asset of document.assets) {
     if (asset.rasterResource.resourceId === resourceId) owners++;
