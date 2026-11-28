@@ -363,7 +363,7 @@ async function commandTests() {
 
 async function rasterCommandTests() {
   const db = 'sprite-v10-raster-commands-' + crypto.randomUUID();
-  const store = await ProjectStore.open(db);
+  let store = await ProjectStore.open(db);
   try {
     const blank = createProject();
     await store.create(blank);
@@ -505,11 +505,57 @@ async function rasterCommandTests() {
     const reattached = (await store.load(blank.projectId))!.document.assets[0].mask!;
     equal([reattached.resourceId, reattached.revision, reattached.contentHash],
       [newAttachment.resourceId, 3, newAttachment.contentHash]);
-    return { maskPresenceHistory: 'pass', maskTombstoneProtection: 'pass', cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
+    store.close();
+    store = await ProjectStore.open(db);
+    const reopenedBus = new CommandBus(store, () => {}, bus.historyId);
+    const otherEditor = new CommandBus(store, () => {});
+    const isolated = await otherEditor.undo(blank.projectId);
+    equal(!isolated.ok && isolated.error.code, 'empty-history');
+    equal((await reopenedBus.undo(blank.projectId)).ok, true);
+    equal((await store.load(blank.projectId))?.document.assets[0].mask, undefined);
+    equal((await reopenedBus.redo(blank.projectId)).ok, true);
+    const persisted = (await store.load(blank.projectId, bus.historyId))!;
+    equal(persisted.document.assets[0].mask?.resourceId, newAttachment.resourceId);
+    equal(persisted.document.assets[0].mask?.revision, 5);
+    const rejectedSnapshot = structuredClone(persisted.document);
+    rejectedSnapshot.revision++;
+    await rejects(store.commit(rejectedSnapshot,
+      { projectRevision: persisted.document.revision - 1, entities: {}, resources: {} }, undefined,
+      { id: bus.historyId, snapshot: { undo: [], redo: [], segment: 999 } }),
+      error => error instanceof ConflictError && error.kind === 'project-cas');
+    const unchanged = (await store.load(blank.projectId, bus.historyId))!;
+    equal(unchanged.document.revision, persisted.document.revision);
+    equal(unchanged.history?.segment, persisted.history?.segment);
+    equal(unchanged.history?.undo.length, persisted.history?.undo.length);
+    return { persistedHistoryReopen: 'pass', isolatedHistoryTimeline: 'pass', historyAtomicity: 'pass', maskPresenceHistory: 'pass', maskTombstoneProtection: 'pass', cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 
-Promise.all([run(), commandTests(), rasterCommandTests()]).then(([fixture, commands, rasterCommands]) => {
-  const value = { ...fixture, commands, rasterCommands };
+async function historySchemaUpgrade() {
+  const db = 'sprite-v10-upgrade-' + crypto.randomUUID();
+  const project = createProject();
+  const opening = indexedDB.open(db, 1);
+  opening.onupgradeneeded = () => {
+    const database = opening.result;
+    database.createObjectStore('resources');
+    database.createObjectStore('staging', { keyPath: 'id' }).createIndex('createdAt', 'createdAt');
+    database.createObjectStore('projects').add(project, project.projectId);
+  };
+  const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+    opening.onsuccess = () => resolve(opening.result);
+    opening.onerror = () => reject(opening.error);
+  });
+  legacy.close();
+  const upgraded = await ProjectStore.open(db);
+  try {
+    const loaded = await upgraded.load(project.projectId, crypto.randomUUID());
+    equal(loaded?.document, project);
+    equal(loaded?.history, undefined);
+    return 'pass';
+  } finally { upgraded.close(); indexedDB.deleteDatabase(db); }
+}
+
+Promise.all([run(), commandTests(), rasterCommandTests(), historySchemaUpgrade()]).then(([fixture, commands, rasterCommands, historyUpgrade]) => {
+  const value = { ...fixture, commands, rasterCommands, historyUpgrade };
   document.querySelector('#result')!.textContent = JSON.stringify(value); },
   error => { document.querySelector('#result')!.textContent = JSON.stringify({ test: { error: String(error.stack ?? error) } }); });

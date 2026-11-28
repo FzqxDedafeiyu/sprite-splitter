@@ -1,6 +1,6 @@
 import { applyMaskPresence, getMaskEditResources, type MaskPresenceEdit } from './mask-command.ts';
 import { applyRasterReplacement, findSprite, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
-import { SessionHistory, type HistoryDirection } from './session-history.ts';
+import { SessionHistory, type HistoryDirection, type HistorySnapshot } from './session-history.ts';
 import type { ProjectDocument, Rect, SpriteAsset } from './domain.ts';
 import { entities, invariant, resources, sameValue } from './project.ts';
 import { ConflictError, type CommitExpectation, type ProjectStore } from './project-store.ts';
@@ -10,7 +10,7 @@ export type ChangeSet = {
   writeEntities: readonly string[];
   resources: readonly string[];
 };
-type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number; publishError?: string; historyError?: string };
+type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number; publishError?: string };
 type Failed = { ok: false; commandId: string; affectedIds: string[]; baseRevision: number | null; attemptedRevision: number | null; attempts: number;
   error: { code: string; message: string; retryable: boolean; cause?: string; conflict?: { kind: ConflictError['kind']; target: string } } };
 export type CommandResult = Committed | Failed;
@@ -81,13 +81,15 @@ function applyProperties(document: ProjectDocument, changes: PropertyChanges): E
 }
 
 export class CommandBus {
-  #history = new Map<string, SessionHistory<HistoryChange>>();
   // The caller retains an opaque ID; the bus owns only the patch and captured expectations.
   #plans = new Map<string, Captured>();
   #queue = Promise.resolve();
 
   constructor(private readonly persistence: Pick<ProjectStore, 'load' | 'commit'> & Partial<Pick<ProjectStore, 'stage'>>,
-    private readonly publish: (document: ProjectDocument) => void) {}
+    private readonly publish: (document: ProjectDocument) => void,
+    readonly historyId: string = crypto.randomUUID()) {
+    invariant(historyId.length > 0 && historyId.length <= 120, 'Invalid history timeline ID');
+  }
 
   prepareSpriteProperties(snapshot: ProjectDocument, changes: readonly SpritePropertyChange[]): string {
     return this.prepareCompositeSpriteProperties(snapshot, [changes]);
@@ -217,29 +219,24 @@ export class CommandBus {
     return result;
   }
 
-  #historyFor(projectId: string) {
-    let history = this.#history.get(projectId);
-    if (!history) {
-      history = new SessionHistory<HistoryChange>();
-      this.#history.set(projectId, history);
-    }
-    return history;
-  }
-
   async #restore(projectId: string, direction: HistoryDirection): Promise<CommandResult> {
     const commandId = crypto.randomUUID();
-    const history = this.#history.get(projectId);
-    const entry = history?.peek(direction);
-    const change = entry?.change;
-    const affectedIds = !change ? [] : change.kind === 'properties' ? [...change[direction].keys()] : [change.spriteId];
+    let affectedIds: string[] = [];
+    let baseRevision: number | null = null;
     let attempts = 0;
     let document: ProjectDocument;
     try {
-      invariant(history && entry && change, 'No history entry');
-      const snapshot = await this.persistence.load(projectId);
+      const snapshot = await this.persistence.load(projectId, this.historyId);
       invariant(snapshot, 'Project no longer exists');
+      const history = new SessionHistory(snapshot.history as HistorySnapshot<HistoryChange> | undefined);
+      const entry = history.peek(direction);
+      if (!entry) return { ok: false, commandId, affectedIds, baseRevision, attemptedRevision: null, attempts,
+        error: { code: 'empty-history', message: 'There is no history entry to apply.', retryable: false } };
+      const change = entry.change;
+      affectedIds = change.kind === 'properties' ? [...change[direction].keys()] : [change.spriteId];
+      baseRevision = entry.revision;
       document = snapshot.document;
-      if (document.revision !== entry.revision) throw new ConflictError('project-cas', projectId);
+      if (document.revision !== baseRevision) throw new ConflictError('project-cas', projectId);
       const resourceIds = change.kind === 'raster' ? rasterResourceIds(document, change.spriteId, change[direction]) :
         change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) : [];
       const checks = captureExpectations(document, { readEntities: [], writeEntities: affectedIds.map(spriteKey),
@@ -257,18 +254,18 @@ export class CommandBus {
         stageId = (await this.#applyMaskPresence(document, snapshot.bytes, change.spriteId, edit)).stageId;
       }
       document.revision++;
+      history.complete(direction, document.revision);
       attempts++;
-      await this.persistence.commit(document, checks, stageId);
+      await this.persistence.commit(document, checks, stageId, { id: this.historyId, snapshot: history.snapshot() });
     } catch (error) {
       const conflict = error instanceof ConflictError ? { kind: error.kind, target: error.target } : undefined;
-      return { ok: false, commandId, affectedIds, baseRevision: entry?.revision ?? null,
-        attemptedRevision: attempts ? entry!.revision : null, attempts,
-        error: { code: conflict?.kind ?? (entry ? 'history-failed' : 'empty-history'),
+      return { ok: false, commandId, affectedIds, baseRevision, attemptedRevision: attempts ? baseRevision : null, attempts,
+        error: { code: conflict?.kind ?? 'history-failed',
           message: conflict ? 'Project changed after this history entry. Reload and review the current state.' :
-            entry ? 'History update did not complete.' : 'There is no history entry to apply.',
+            'History update did not complete.',
           retryable: false, cause: String(error), conflict } };
     }
-    return this.#afterCommit(commandId, affectedIds, document, () => history!.complete(direction, document.revision));
+    return this.#publish(commandId, affectedIds, document);
   }
 
   async #execute(commandId: string, plan: Captured): Promise<CommandResult> {
@@ -277,10 +274,9 @@ export class CommandBus {
     let attemptedRevision: number | null = null;
     let attempts = 0;
     let committed: ProjectDocument;
-    let committedHistory: HistoryChange;
     try {
       while (true) {
-        const loaded = await this.persistence.load(projectId);
+        const loaded = await this.persistence.load(projectId, this.historyId);
         invariant(loaded, 'Project no longer exists');
         const next = loaded.document;
         const checks = captureExpectations(next, operation.changes);
@@ -293,13 +289,14 @@ export class CommandBus {
         if (next.revision !== expectation.projectRevision) {
           if (operation.rebase === 'never') throw new ConflictError('project-cas', projectId);
         }
+        const history = new SessionHistory(loaded.history as HistorySnapshot<HistoryChange> | undefined);
         const applied = await operation.apply(next, loaded.bytes);
         next.revision++;
+        history.record(applied.history, checks.projectRevision, next.revision, applied.history.bytes);
         try {
           attempts++;
           attemptedRevision = checks.projectRevision;
-          await this.persistence.commit(next, checks, applied.stageId);
-          committedHistory = applied.history;
+          await this.persistence.commit(next, checks, applied.stageId, { id: this.historyId, snapshot: history.snapshot() });
           committed = next;
           break;
         } catch (error) {
@@ -320,18 +317,11 @@ export class CommandBus {
       return { ok: false, commandId, affectedIds, baseRevision: expectation.projectRevision, attemptedRevision, attempts,
         error: { code, message, cause: String(error), retryable: code === 'project-cas', conflict } };
     }
-    return this.#afterCommit(commandId, affectedIds, committed, () =>
-      this.#historyFor(projectId).record(committedHistory, committed.revision - 1, committed.revision, committedHistory.bytes));
+    return this.#publish(commandId, affectedIds, committed);
   }
 
-  #afterCommit(commandId: string, affectedIds: string[], committed: ProjectDocument,
-    recordHistory: () => void): Committed {
+  #publish(commandId: string, affectedIds: string[], committed: ProjectDocument): Committed {
     const result: Committed = { ok: true, commandId, affectedIds, projectRevision: committed.revision };
-    try { recordHistory(); }
-    catch (error) {
-      this.#history.delete(committed.projectId);
-      result.historyError = String(error);
-    }
     try { this.publish(committed); }
     catch (error) { result.publishError = String(error); }
     return result;

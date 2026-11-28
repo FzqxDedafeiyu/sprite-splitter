@@ -1,12 +1,27 @@
 export type HistoryDirection = 'undo' | 'redo';
 
 type Entry<T> = { change: T; revision: number; segment: number; createdAt: number; bytes: number };
+export type HistorySnapshot<T> = { undo: Entry<T>[]; redo: Entry<T>[]; segment: number };
 const retention = 30 * 24 * 60 * 60 * 1000;
 
 export class SessionHistory<T> {
   #undo: Entry<T>[] = [];
   #redo: Entry<T>[] = [];
   #segment = 0;
+
+  constructor(snapshot?: HistorySnapshot<T>) {
+    if (snapshot) {
+      const copy = structuredClone(snapshot);
+      this.#undo = copy.undo;
+      this.#redo = copy.redo;
+      this.#segment = copy.segment;
+    }
+  }
+
+  snapshot(): HistorySnapshot<T> {
+    this.#prune();
+    return { undo: this.#undo, redo: this.#redo, segment: this.#segment };
+  }
 
   record(change: T, before: number, after: number, bytes = 0) {
     this.#prune();

@@ -1,3 +1,4 @@
+import type { HistorySnapshot } from './session-history.ts';
 import type { ProjectDocument, ResourceVersion } from './domain.ts';
 import { entities, invariant, resources, sameValue, validateProject } from './project.ts';
 import { inspectRaster } from './mask.ts';
@@ -15,6 +16,7 @@ export class ConflictError extends Error {
     super(kind + ': ' + target);
   }
 }
+type HistoryWrite = { id: string; snapshot: HistorySnapshot<unknown> };
 type StagedInput = { resourceId: string; revision: number; bytes: Blob };
 type StoredResource = { version: ResourceVersion; bytes: Blob; raster?: Awaited<ReturnType<typeof inspectRaster>> };
 type Stage = { id: string; projectId: string; createdAt: number; records: StoredResource[] };
@@ -138,11 +140,14 @@ export class ProjectStore {
   private constructor(private readonly database: IDBDatabase) {}
 
   static async open(name = 'sprite-splitter-v10', factory = indexedDB) {
-    const opening = factory.open(name, 1);
-    opening.onupgradeneeded = () => {
-      opening.result.createObjectStore('projects');
-      opening.result.createObjectStore('resources');
-      opening.result.createObjectStore('staging', { keyPath: 'id' }).createIndex('createdAt', 'createdAt');
+    const opening = factory.open(name, 2);
+    opening.onupgradeneeded = event => {
+      if (event.oldVersion === 0) {
+        opening.result.createObjectStore('projects');
+        opening.result.createObjectStore('resources');
+        opening.result.createObjectStore('staging', { keyPath: 'id' }).createIndex('createdAt', 'createdAt');
+      }
+      if (event.oldVersion < 2) opening.result.createObjectStore('history');
     };
     const database = await result(opening);
     database.onversionchange = () => database.close();
@@ -165,8 +170,8 @@ export class ProjectStore {
     });
   }
 
-  async load(projectId: string) {
-    const tx = this.database.transaction(['projects', 'resources'], 'readonly');
+  async load(projectId: string, historyId?: string) {
+    const tx = this.database.transaction(['projects', 'resources', 'history'], 'readonly');
     const snapshot = await atomic(tx, async () => {
       const document = await result<ProjectDocument | undefined>(tx.objectStore('projects').get(projectId));
       if (!document) return undefined;
@@ -175,7 +180,9 @@ export class ProjectStore {
         version,
         stored: await result<StoredResource | undefined>(tx.objectStore('resources').get(resourceKey(projectId, version)))
       })));
-      return { document, records };
+      const history = historyId === undefined ? undefined :
+        await result<HistorySnapshot<unknown> | undefined>(tx.objectStore('history').get([projectId, historyId]));
+      return { document, records, history };
     });
     if (!snapshot) return undefined;
     const bytes = new Map<string, Blob>();
@@ -184,7 +191,7 @@ export class ProjectStore {
         await resourceHash(stored.bytes) === version.contentHash, 'Missing or damaged resource: ' + version.resourceId);
       bytes.set(version.resourceId, stored.bytes);
     }
-    return { document: snapshot.document, bytes };
+    return { document: snapshot.document, bytes, history: snapshot.history };
   }
 
   async stage(projectId: string, input: readonly StagedInput[]) {
@@ -201,12 +208,14 @@ export class ProjectStore {
     return { id, versions: records.map(({ version }) => version) };
   }
 
-  async commit(document: ProjectDocument, expectation: CommitExpectation, stageId?: string) {
-    const next = structuredClone(document);
-    const expected = structuredClone(expectation);
+  async commit(document: ProjectDocument, expectation: CommitExpectation, stageId?: string, history?: HistoryWrite) {
+    const projectId = document.projectId;
     try {
+      const next = structuredClone(document);
+      const expected = structuredClone(expectation);
+      const historyWrite = history && structuredClone(history);
       validateProject(next);
-      const tx = this.database.transaction(['projects', 'resources', 'staging'], 'readwrite');
+      const tx = this.database.transaction(['projects', 'resources', 'staging', 'history'], 'readwrite');
       await atomic(tx, async () => {
         const projects = tx.objectStore('projects');
         const staging = tx.objectStore('staging');
@@ -253,11 +262,12 @@ export class ProjectStore {
           }
         }
         await result(projects.put(next, next.projectId));
+        if (historyWrite) await result(tx.objectStore('history').put(historyWrite.snapshot, [next.projectId, historyWrite.id]));
         if (stageId) await result(staging.delete(stageId));
       });
     } catch (error) {
       if (stageId) {
-        try { await this.discardStage(next.projectId, stageId); }
+        try { await this.discardStage(projectId, stageId); }
         catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Commit and staging cleanup failed'); }
       }
       throw error;
