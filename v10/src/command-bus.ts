@@ -1,3 +1,4 @@
+import { animationSetId, animationSetKey, applyAnimationSet, newAnimationSetEdit, type AnimationSetEdit, type NewAnimationSet } from './animation-command.ts';
 import { collectAgentAnnotations, type AgentAnnotationEdit } from './agent-annotation-command.ts';
 import { applySceneEdits, collectSceneEdits, sceneItemKey, sceneOrderEdits, type SceneEdits, type SceneItemEdit } from './scene-command.ts';
 import { applySpritePresence, newSpriteEdit, spritePresenceKeys, spritePresenceResources, spritePresenceTarget, type NewSprite, type SpritePresenceEdit } from './sprite-command.ts';
@@ -59,7 +60,8 @@ type HistoryChange =
   | { kind: 'scene'; undo: SceneEdits; redo: SceneEdits; bytes: 0 }
   | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number }
   | { kind: 'mask-presence'; spriteId: string; undo: MaskPresenceEdit; redo: MaskPresenceEdit; bytes: number }
-  | { kind: 'sprite-presence'; spriteId: string; undo: SpritePresenceEdit; redo: SpritePresenceEdit; bytes: number };
+  | { kind: 'sprite-presence'; spriteId: string; undo: SpritePresenceEdit; redo: SpritePresenceEdit; bytes: number }
+  | { kind: 'animation-set'; setId: string; undo: AnimationSetEdit; redo: AnimationSetEdit; bytes: 0 };
 type Applied = { history: HistoryChange; stageId?: string };
 
 function applyProperties(document: ProjectDocument, changes: PropertyChanges): Extract<HistoryChange, { kind: 'properties' }> {
@@ -224,6 +226,20 @@ export class CommandBus {
         undo: change.undo, redo: change.redo, bytes: change.bytes } };
   }
 
+  prepareAnimationSetCreation(snapshot: ProjectDocument, input: NewAnimationSet): string {
+    const edit = newAnimationSetEdit(input, snapshot.animationSets.length);
+    const id = animationSetId(edit);
+    const operation: Operation = {
+      affectedIds: [id],
+      changes: { readEntities: input.spriteIds.map(spriteKey), writeEntities: [animationSetKey(id)], resources: [] },
+      rebase: 'never',
+      apply: document => ({
+        history: { kind: 'animation-set', setId: id, ...applyAnimationSet(document, edit), bytes: 0 }
+      })
+    };
+    return this.#remember(snapshot, operation);
+  }
+
   prepareSceneItemUpdates(snapshot: ProjectDocument, edits: readonly SceneItemEdit[]): string {
     const patches = collectSceneEdits(snapshot, edits);
     const affectedIds = [...patches.keys()];
@@ -295,7 +311,8 @@ export class CommandBus {
       if (!entry) return { ok: false, commandId, affectedIds, baseRevision, attemptedRevision: null, attempts,
         error: { code: 'empty-history', message: 'There is no history entry to apply.', retryable: false } };
       const change = entry.change;
-      affectedIds = change.kind === 'properties' || change.kind === 'scene' ? [...change[direction].keys()] : [change.spriteId];
+      affectedIds = change.kind === 'properties' || change.kind === 'scene' ? [...change[direction].keys()] :
+        [change.kind === 'animation-set' ? change.setId : change.spriteId];
       baseRevision = entry.revision;
       document = snapshot.document;
       if (document.revision !== baseRevision) throw new ConflictError('project-cas', projectId);
@@ -303,13 +320,21 @@ export class CommandBus {
         change.kind === 'mask-presence' ? getMaskEditResources(document, change.spriteId, change[direction]) :
         change.kind === 'sprite-presence' ? spritePresenceResources(document, change[direction]) : [];
       const keys = change.kind === 'sprite-presence' ? spritePresenceKeys(document, change[direction]) :
-        affectedIds.map(change.kind === 'scene' ? sceneItemKey : spriteKey);
+        affectedIds.map(change.kind === 'scene' ? sceneItemKey :
+          change.kind === 'animation-set' ? animationSetKey : spriteKey);
       const checks = captureExpectations(document, { readEntities: [], writeEntities: keys,
         resources: resourceIds });
       let stageId: string | undefined;
       if (change.kind === 'properties') applyProperties(document, change[direction]);
       else if (change.kind === 'scene') applySceneEdits(document, change[direction]);
-      else if (change.kind === 'raster') {
+      else if (change.kind === 'animation-set') {
+        const edit = change[direction];
+        if (edit.kind === 'attach' && edit.restore) {
+          const key = animationSetKey(change.setId);
+          checks.entities[key] = { state: 'tombstone', revision: document.revisionLedger.entities[key] };
+        }
+        applyAnimationSet(document, edit);
+      } else if (change.kind === 'raster') {
         stageId = (await this.#applyRaster(document, snapshot.bytes, change.spriteId, change[direction])).stageId;
       } else if (change.kind === 'mask-presence') {
         const edit = change[direction];

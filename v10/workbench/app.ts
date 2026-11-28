@@ -10,7 +10,7 @@ import { ProjectStore } from '../src/project-store.ts';
 import { readV9Archive } from '../src/v9-archive.ts';
 import { previewV9Migration } from '../src/v9-migration.ts';
 import { exportV9Scene } from '../src/v9-export.ts';
-import type { MigrationWarning, ProjectDocument, Rect, SpriteAsset } from '../src/domain.ts';
+import type { AssetType, MigrationWarning, ProjectDocument, Rect, SpriteAsset } from '../src/domain.ts';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 const zip = element<HTMLInputElement>('zip');
@@ -24,6 +24,10 @@ const sprites = element('sprites');
 const reload = element<HTMLButtonElement>('reload');
 const undo = element<HTMLButtonElement>('undo');
 const redo = element<HTMLButtonElement>('redo');
+const animationGroupForm = element<HTMLFormElement>('animation-group-form');
+const animationGroupName = element<HTMLInputElement>('animation-group-name');
+const animationGroupType = element<HTMLSelectElement>('animation-group-type');
+const animationMembers = element<HTMLSelectElement>('animation-members');
 const spriteName = element<HTMLInputElement>('sprite-name');
 const spriteCategory = element<HTMLInputElement>('sprite-category');
 const spriteDescription = element<HTMLTextAreaElement>('sprite-description');
@@ -174,6 +178,7 @@ function controls() {
   undo.disabled = !saved || !historyAvailable('undo');
   redo.disabled = !saved || !historyAvailable('redo');
   cropEditor.setEnabled(saved && Boolean(sourceFor(opened?.document.assets.find(item => item.id === selectedId))));
+  element<HTMLFieldSetElement>('animation-group-fields').disabled = !saved;
   element<HTMLFieldSetElement>('metadata-fields').disabled = !saved || !selectedId;
   element<HTMLFieldSetElement>('scene-fields').disabled = !saved || !selectedId ||
     !opened?.document.sceneLayout.items[selectedId];
@@ -226,8 +231,30 @@ function showPreview(id?: string) {
   controls();
 }
 
+function showAnimationGroups(project?: ProjectDocument) {
+  const panel = element<HTMLDetailsElement>('animation-groups');
+  panel.hidden = !project || Boolean(pending);
+  if (panel.dataset.projectId !== project?.projectId) {
+    panel.dataset.projectId = project?.projectId ?? '';
+    animationGroupForm.reset();
+  }
+  const selected = new Set(Array.from(animationMembers.selectedOptions, option => option.value));
+  animationMembers.replaceChildren(...(project?.assets ?? []).map(asset =>
+    new Option(asset.name, asset.id, false, selected.has(asset.id))));
+  const list = element('animation-group-list');
+  list.replaceChildren();
+  for (const group of project?.animationSets ?? []) {
+    const entry = document.createElement('li');
+    entry.dataset.groupId = group.id;
+    entry.textContent = [group.name, group.assetType === 'character' ? '角色' : '物体',
+      group.spriteIds.length + ' 个素材'].join(' · ');
+    list.append(entry);
+  }
+}
+
 function render(warnings: readonly MigrationWarning[], skipped: number) {
   const project = opened?.document;
+  showAnimationGroups(project);
   element('asset-count').textContent = (project?.assets.length ?? 0) + ' 个';
   const name = project?.sourceImages[0]?.filename ?? '场景素材';
   element('summary').hidden = !project;
@@ -359,6 +386,21 @@ save.addEventListener('click', () => {
     await openSaved(id);
     await refreshProjects(id);
     say('已保存为 V10 本地项目。');
+  });
+});
+
+animationGroupForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const snapshot = opened?.document;
+  if (!snapshot || pending) return;
+  const name = animationGroupName.value.trim();
+  if (!name) { say('请输入动作组名称。', true); return; }
+  const assetType = animationGroupType.value as AssetType;
+  const spriteIds = Array.from(animationMembers.selectedOptions, option => option.value);
+  void run('正在创建动作组…', async () => {
+    const command = bus.prepareAnimationSetCreation(snapshot, { name, assetType, spriteIds });
+    await applyCommand(snapshot.projectId, () => bus.dispatch(command), '动作组已创建。');
+    if (opened?.document.animationSets.length === snapshot.animationSets.length + 1) animationGroupForm.reset();
   });
 });
 

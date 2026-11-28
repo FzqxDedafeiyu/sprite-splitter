@@ -104,7 +104,7 @@ function checkTransition(current: ProjectDocument, next: ProjectDocument, expect
       continue;
     }
     const restoration = expected.entities[key];
-    const restoring = (key.startsWith('spriteAsset:') || key.startsWith('sceneItem:')) &&
+    const restoring = (key.startsWith('spriteAsset:') || key.startsWith('sceneItem:') || key.startsWith('animationSet:')) &&
       !before && restoration?.state === 'tombstone';
     const revision = before ? before.revision + Number(changed) : restoring ? restoration.revision + 1 : 1;
     invariant((before || restoring || !Object.hasOwn(entityLedger, key)) && after.revision === revision,

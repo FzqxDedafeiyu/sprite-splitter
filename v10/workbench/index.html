@@ -52,6 +52,12 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 #crop-fields{grid-template-columns:repeat(4,minmax(0,1fr))}
 #crop-fields .actions{grid-column:1/-1}
 @media(max-width:560px){#crop-fields{grid-template-columns:1fr 1fr}}
+#animation-groups{margin-bottom:1rem;padding:.65rem .85rem}
+#animation-groups form{margin-top:.6rem}
+#animation-groups select{border:1px solid #43526a;border-radius:5px;background:#121a24;color:inherit;padding:.3rem}
+#animation-members{min-height:5rem}
+#animation-group-list{padding-left:1.2rem}
+#animation-group-list:empty{display:none}
 #annotation{padding:0 1rem .8rem;color:#bdcfea;overflow-wrap:anywhere}
 .editor{display:grid;grid-template-columns:1fr 1fr;gap:1rem;padding:0 1rem 1rem}
 fieldset{min-width:0;margin:0;padding:.65rem;border:1px solid #303a49;border-radius:6px;display:grid;grid-template-columns:1fr 1fr;gap:.65rem}
@@ -113,6 +119,19 @@ fieldset:disabled{opacity:.55}
 <button type="button" id="cancel-agent" disabled>取消</button>
 </div>
 </section>
+<details id="animation-groups" class="panel" hidden>
+<summary>动画动作组</summary>
+<ul id="animation-group-list"></ul>
+<form id="animation-group-form">
+<fieldset id="animation-group-fields" disabled>
+<legend>新建动作组</legend>
+<label>名称<input id="animation-group-name" required></label>
+<label>类型<select id="animation-group-type"><option value="character">角色</option><option value="object">物体</option></select></label>
+<label class="wide">素材成员（可多选）<select id="animation-members" multiple></select></label>
+<button type="submit">创建动作组</button>
+</fieldset>
+</form>
+</details>
 <div class="workspace">
 <section class="panel"><h2>素材 <output id="asset-count" aria-label="素材总数">0 个</output></h2><ul id="sprites"></ul></section>
 <section class="panel">

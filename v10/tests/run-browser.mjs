@@ -454,7 +454,41 @@ try {
   await app.evaluate('document.querySelector("#export").click()');
   await waitFor(async () => (await appStatus())?.includes('兼容 ZIP 已生成'), 'export manually created sprite');
 
-  const workbench = { agentTaskRoundTrip: 'pass', sourceManualCreation: 'pass', sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const manualProjectId = await app.evaluate('document.querySelector("#projects").value');
+  const createGroup = (name, type) => app.evaluate('(' + ((name, type) => {
+    document.querySelector('#animation-groups').open = true;
+    document.querySelector('#animation-group-name').value = name;
+    document.querySelector('#animation-group-type').value = type;
+    document.querySelector('#animation-members option').selected = true;
+    document.querySelector('#animation-group-form').requestSubmit();
+  }).toString() + ')(' + JSON.stringify(name) + ',' + JSON.stringify(type) + ')');
+  const groupEntries = () => app.evaluate('Array.from(document.querySelectorAll("#animation-group-list li"), ' +
+    'row => [row.dataset.groupId, row.textContent])');
+  await createGroup('主角', 'character');
+  await waitFor(async () => (await appStatus()) === '动作组已创建。', 'character group creation');
+  await createGroup('舱门', 'object');
+  await waitFor(async () => (await appStatus()) === '动作组已创建。', 'object group creation');
+  const groups = await groupEntries();
+  if (groups.map(row => row[1]).join('|') !== '主角 · 角色 · 1 个素材|舱门 · 物体 · 1 个素材' || groups[0][0] === groups[1][0]) {
+    throw new Error('Animation group types, identities or memberships are incorrect');
+  }
+  await app.reload();
+  await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'animation group workbench reload');
+  await app.evaluate('(' + (id => {
+    const select = document.querySelector('#projects');
+    select.value = id;
+    select.dispatchEvent(new Event('change'));
+  }).toString() + ')(' + JSON.stringify(manualProjectId) + ')');
+  await waitFor(async () => (await appStatus())?.includes('已打开 V10'), 'reopen animation groups');
+  if (JSON.stringify(await groupEntries()) !== JSON.stringify(groups)) throw new Error('Animation groups did not persist');
+  await app.evaluate('document.querySelector("#undo").click()');
+  await waitFor(async () => (await appStatus()) === '已撤销。', 'undo animation group creation');
+  if ((await groupEntries()).length !== 1) throw new Error('Undo did not remove the created animation group');
+  await app.evaluate('document.querySelector("#redo").click()');
+  await waitFor(async () => (await appStatus()) === '已重做。', 'redo animation group creation');
+  if (JSON.stringify(await groupEntries()) !== JSON.stringify(groups)) throw new Error('Redo changed group identity');
+
+  const workbench = { animationGroups: 'pass', agentTaskRoundTrip: 'pass', sourceManualCreation: 'pass', sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);
