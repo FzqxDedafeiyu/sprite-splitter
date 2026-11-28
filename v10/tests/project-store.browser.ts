@@ -289,7 +289,38 @@ async function commandTests() {
     equal(bus.cancel(pending[0]), true);
     equal(bus.cancel(prepare()), true);
     pending.slice(1).forEach(command => bus.cancel(command));
-    return { retrySucceedsAfterRebase: 'pass', pendingCap: 'pass', publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
+    const historyBus = new CommandBus(persistence, () => {});
+    const historyBase = (await persistence.load(project.projectId))!.document;
+    const apply = async (snapshot: ProjectDocument, patch: { name?: string; description?: string }) =>
+      historyBus.dispatch(historyBus.prepareSpriteProperties(snapshot, [{ spriteId: id, patch }]));
+    equal((await apply(historyBase, { description: '临时说明' })).ok, true);
+    const afterFirst = (await persistence.load(project.projectId))!.document;
+    equal((await apply(afterFirst, { name: '历史名称' })).ok, true);
+    equal((await historyBus.undo(project.projectId)).ok, true);
+    equal((await historyBus.undo(project.projectId)).ok, true);
+    const undone = (await persistence.load(project.projectId))!.document;
+    equal(undone.assets[0].name, historyBase.assets[0].name);
+    equal(Object.hasOwn(undone.assets[0], 'description'), false);
+    equal(undone.assets[0].revision, historyBase.assets[0].revision + 4);
+    equal((await historyBus.redo(project.projectId)).ok, true);
+    equal((await historyBus.redo(project.projectId)).ok, true);
+    const redone = (await persistence.load(project.projectId))!.document;
+    equal([redone.assets[0].name, redone.assets[0].description], ['历史名称', '临时说明']);
+    equal(redone.assets[0].revision, historyBase.assets[0].revision + 6);
+    const changedOutside = structuredClone(redone);
+    changedOutside.revision++;
+    changedOutside.legacyExtensions = { outside: true };
+    await persistence.commit(changedOutside, { projectRevision: redone.revision, entities: {}, resources: {} });
+    for (let check = 0; check < 2; check++) {
+      const refused = await historyBus.undo(project.projectId);
+      equal(!refused.ok && [refused.error.code, refused.error.retryable, refused.attempts], ['project-cas', false, 0]);
+    }
+    equal((await persistence.load(project.projectId))?.document.assets[0].name, '历史名称');
+    equal((await apply(changedOutside, { name: '新历史段' })).ok, true);
+    equal((await historyBus.undo(project.projectId)).ok, true);
+    const blocked = await historyBus.undo(project.projectId);
+    equal(!blocked.ok && blocked.error.code, 'project-cas');
+    return { historyRoundTrip: 'pass', historyExternalConflict: 'pass', retrySucceedsAfterRebase: 'pass', pendingCap: 'pass', publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
   } finally { persistence.close(); indexedDB.deleteDatabase(db); }
 }
 

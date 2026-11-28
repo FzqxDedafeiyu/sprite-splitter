@@ -1,3 +1,4 @@
+import { SessionHistory, type HistoryDirection } from './session-history.ts';
 import type { ProjectDocument, SpriteAsset } from './domain.ts';
 import { entities, invariant, resources, sameValue } from './project.ts';
 import { ConflictError, type CommitExpectation, type ProjectStore } from './project-store.ts';
@@ -15,7 +16,7 @@ type Operation = {
   affectedIds: readonly string[];
   changes: ChangeSet;
   rebase: 'never' | 'independent-absolute-sprite-fields';
-  apply(document: ProjectDocument): void;
+  apply(document: ProjectDocument): PropertyHistory;
 };
 type Captured = {
   projectId: string;
@@ -45,7 +46,35 @@ type PropertyPatch = Partial<Pick<SpriteAsset, 'name' | 'category' | 'descriptio
 const propertyNames = new Set(['name', 'category', 'description', 'groupName']);
 const spriteKey = (id: string) => 'spriteAsset:' + id;
 
+type PropertyChanges = Map<string, PropertyPatch>;
+type PropertyHistory = { undo: PropertyChanges; redo: PropertyChanges };
+
+function applyProperties(document: ProjectDocument, changes: PropertyChanges): PropertyHistory {
+  const undo: PropertyChanges = new Map();
+  const redo: PropertyChanges = new Map();
+  document.assets = document.assets.map(sprite => {
+    const patch = changes.get(sprite.id);
+    if (!patch) return sprite;
+    const next = { ...sprite };
+    const previous: PropertyPatch = {};
+    for (const key of Object.keys(patch) as Array<keyof PropertyPatch>) {
+      Object.assign(previous, { [key]: sprite[key] });
+      if (patch[key] === undefined) Reflect.deleteProperty(next, key);
+      else Object.assign(next, { [key]: patch[key] });
+    }
+    if (sameValue(sprite, next)) return sprite;
+    undo.set(sprite.id, previous);
+    redo.set(sprite.id, patch);
+    next.revision++;
+    document.revisionLedger.entities[spriteKey(sprite.id)] = next.revision;
+    return next;
+  });
+  invariant(undo.size, 'Property command would make no changes');
+  return { undo, redo };
+}
+
 export class CommandBus {
+  #history = new Map<string, SessionHistory<PropertyHistory>>();
   // The caller retains an opaque ID; the bus owns only the patch and captured expectations.
   #plans = new Map<string, Captured>();
   #queue = Promise.resolve();
@@ -70,18 +99,7 @@ export class CommandBus {
       affectedIds,
       changes: { readEntities: [], writeEntities: affectedIds.map(spriteKey), resources: [] },
       rebase: 'independent-absolute-sprite-fields',
-      apply(document) {
-        let changed = false;
-        document.assets = document.assets.map(sprite => {
-          const patch = patches.get(sprite.id);
-          if (!patch || sameValue(sprite, { ...sprite, ...patch })) return sprite;
-          changed = true;
-          const next = { ...sprite, ...patch, revision: sprite.revision + 1 };
-          document.revisionLedger.entities[spriteKey(sprite.id)] = next.revision;
-          return next;
-        });
-        invariant(changed, 'Property command would make no changes');
-      }
+      apply: document => applyProperties(document, patches)
     };
     const commandId = crypto.randomUUID();
     this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
@@ -96,9 +114,57 @@ export class CommandBus {
     if (!plan) return { ok: false, commandId, affectedIds: [], baseRevision: null, attemptedRevision: null, attempts: 0,
       error: { code: 'unknown-command', message: 'Command was cancelled or already dispatched', retryable: false } };
     this.#plans.delete(commandId);
-    const task = this.#queue.then(() => this.#execute(commandId, plan));
-    this.#queue = task.then(() => {}, () => {});
-    return task;
+    return this.#enqueue(() => this.#execute(commandId, plan));
+  }
+
+  undo(projectId: string): Promise<CommandResult> { return this.#enqueue(() => this.#restore(projectId, 'undo')); }
+  redo(projectId: string): Promise<CommandResult> { return this.#enqueue(() => this.#restore(projectId, 'redo')); }
+
+  #enqueue(task: () => Promise<CommandResult>) {
+    const result = this.#queue.then(task);
+    this.#queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  #historyFor(projectId: string) {
+    let history = this.#history.get(projectId);
+    if (!history) {
+      history = new SessionHistory<PropertyHistory>();
+      this.#history.set(projectId, history);
+    }
+    return history;
+  }
+
+  async #restore(projectId: string, direction: HistoryDirection): Promise<CommandResult> {
+    const commandId = crypto.randomUUID();
+    const history = this.#history.get(projectId);
+    const entry = history?.peek(direction);
+    const changes = entry?.change[direction];
+    const affectedIds = [...(changes?.keys() ?? [])];
+    let attempts = 0;
+    let document: ProjectDocument;
+    try {
+      invariant(history && entry && changes, 'No history entry');
+      const snapshot = await this.persistence.load(projectId);
+      invariant(snapshot, 'Project no longer exists');
+      document = snapshot.document;
+      if (document.revision !== entry.revision) throw new ConflictError('project-cas', projectId);
+      const checks = captureExpectations(document, { readEntities: [], writeEntities: affectedIds.map(spriteKey), resources: [] });
+      applyProperties(document, changes);
+      document.revision++;
+      attempts++;
+      await this.persistence.commit(document, checks);
+      history.complete(direction, document.revision);
+    } catch (error) {
+      const conflict = error instanceof ConflictError ? { kind: error.kind, target: error.target } : undefined;
+      return { ok: false, commandId, affectedIds, baseRevision: entry?.revision ?? null,
+        attemptedRevision: attempts ? entry!.revision : null, attempts,
+        error: { code: conflict?.kind ?? (entry ? 'history-failed' : 'empty-history'),
+          message: conflict ? 'Project changed after this history entry. Reload and review the current state.' :
+            entry ? 'History update did not complete.' : 'There is no history entry to apply.',
+          retryable: false, cause: String(error), conflict } };
+    }
+    return this.#publish(commandId, affectedIds, document);
   }
 
   async #execute(commandId: string, plan: Captured): Promise<CommandResult> {
@@ -122,12 +188,13 @@ export class CommandBus {
         if (next.revision !== expectation.projectRevision) {
           if (operation.rebase === 'never') throw new ConflictError('project-cas', projectId);
         }
-        operation.apply(next);
+        const history = operation.apply(next);
         next.revision++;
         try {
           attempts++;
           attemptedRevision = checks.projectRevision;
           await this.persistence.commit(next, checks);
+          this.#historyFor(projectId).record(history, checks.projectRevision, next.revision);
           committed = next;
           break;
         } catch (error) {
@@ -148,6 +215,10 @@ export class CommandBus {
       return { ok: false, commandId, affectedIds, baseRevision: expectation.projectRevision, attemptedRevision, attempts,
         error: { code, message, cause: String(error), retryable: code === 'project-cas', conflict } };
     }
+    return this.#publish(commandId, affectedIds, committed);
+  }
+
+  #publish(commandId: string, affectedIds: string[], committed: ProjectDocument): Committed {
     const result: Committed = { ok: true, commandId, affectedIds, projectRevision: committed.revision };
     try { this.publish(committed); }
     catch (error) { result.publishError = String(error); }
