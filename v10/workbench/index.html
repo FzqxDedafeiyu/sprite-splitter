@@ -35,7 +35,22 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 #preview{min-height:265px;display:grid;place-items:center;padding:1.25rem;background:repeating-conic-gradient(#27313d 0% 25%,#1e2732 0% 50%) 50%/24px 24px}
 #preview img{max-width:100%;max-height:470px;object-fit:contain;image-rendering:pixelated}
 #selection{padding:.8rem 1rem;color:#bfcddd;overflow-wrap:anywhere}
-#summary[hidden], #image[hidden]{display:none}
+#summary[hidden], #agent-review[hidden], #annotation[hidden], #image[hidden]{display:none}
+#agent-review{padding:.85rem 1rem;margin:0 0 1rem}
+#agent-review p{margin:.4rem 0}
+#agent-review ul{max-height:140px;overflow:auto;margin:.45rem 0;padding-inline-start:1.2rem}
+#agent-review ul:empty{display:none}
+#annotation{padding:0 1rem .8rem;color:#bdcfea;overflow-wrap:anywhere}
+.editor{display:grid;grid-template-columns:1fr 1fr;gap:1rem;padding:0 1rem 1rem}
+fieldset{min-width:0;margin:0;padding:.65rem;border:1px solid #303a49;border-radius:6px;display:grid;grid-template-columns:1fr 1fr;gap:.65rem}
+legend{font-weight:650;color:#c8d8ed;padding:0 .25rem}
+fieldset label{display:grid;gap:.2rem;color:#c8d1e0}
+fieldset input:not([type="checkbox"]),fieldset textarea{width:100%;min-width:0;border:1px solid #43526a;border-radius:5px;background:#121a24;color:inherit;padding:.35rem .45rem}
+fieldset .wide{grid-column:1/-1}
+fieldset .flag{display:flex;align-items:center;gap:.35rem}
+fieldset button{justify-self:start}
+fieldset:disabled{opacity:.55}
+@media(max-width:900px){.editor{grid-template-columns:1fr}}
 @media(max-width:740px){header{align-items:start;flex-direction:column}.workspace{grid-template-columns:1fr}#sprites{max-height:215px}main{padding:1rem}}
 </style>
 </head>
@@ -44,6 +59,9 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 <h1>精灵图切分编辑器 V10</h1>
 <div class="actions">
 <button type="button" class="primary" id="save" disabled>保存为 V10 项目</button>
+<button type="button" id="reload" disabled>重新读取</button>
+<button type="button" id="undo" disabled>撤销</button>
+<button type="button" id="redo" disabled>重做</button>
 <button type="button" id="export" disabled>导出 V9 ZIP</button>
 </div>
 </header>
@@ -51,6 +69,7 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 <div class="toolbar" aria-label="项目操作">
 <label class="file">导入 V9 ZIP <input id="zip" type="file" accept=".zip,application/zip"></label>
 <label><input id="orphans" type="checkbox">纳入未引用的 PNG</label>
+<label class="file">导入 Agent JSON <input id="agent-file" type="file" accept=".json,application/json" disabled></label>
 <label for="projects">已保存项目</label>
 <select id="projects"><option value="">选择项目</option></select>
 </div>
@@ -59,12 +78,43 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 <p id="summary-text"></p>
 <details id="report"><summary>查看迁移提示</summary><ul id="warnings"></ul></details>
 </section>
+<section id="agent-review" class="panel" aria-label="Agent 标注预览" hidden>
+<h2>Agent 标注预览</h2>
+<p id="agent-summary"></p>
+<ul id="agent-warnings"></ul>
+<div class="actions">
+<button type="button" class="primary" id="apply-agent" disabled>应用标注</button>
+<button type="button" id="cancel-agent" disabled>取消</button>
+</div>
+</section>
 <div class="workspace">
 <section class="panel"><h2>素材 <output id="asset-count" aria-label="素材总数">0 个</output></h2><ul id="sprites"></ul></section>
 <section class="panel">
 <h2>素材预览</h2>
 <div id="preview"><img id="image" alt="" hidden></div>
-<p id="selection">选择素材查看裁切图。</p>
+<p id="selection">选择素材查看裁切图。</p><p id="annotation" hidden></p>
+<div class="editor">
+<form id="metadata-form">
+<fieldset id="metadata-fields" disabled>
+<legend>素材属性</legend>
+<label>名称<input id="sprite-name" required></label>
+<label>分类<input id="sprite-category"></label>
+<label class="wide">描述<textarea id="sprite-description" rows="2"></textarea></label>
+<button type="submit">保存属性</button>
+</fieldset>
+</form>
+<form id="scene-form">
+<fieldset id="scene-fields" disabled>
+<legend>场景属性</legend>
+<label>X<input id="scene-x" type="number" step="any" required></label>
+<label>Y<input id="scene-y" type="number" step="any" required></label>
+<label>层级顺序<input id="scene-z" type="number" step="1" required></label>
+<label class="flag"><input id="scene-visible" type="checkbox">显示</label>
+<label class="flag"><input id="scene-locked" type="checkbox">锁定位置</label>
+<button type="submit">保存场景属性</button>
+</fieldset>
+</form>
+</div>
 </section>
 </div>
 </main>

@@ -1,3 +1,5 @@
+import { previewV9AgentAnnotations } from '../src/v9-agent.ts';
+import { CommandBus, type CommandResult } from '../src/command-bus.ts';
 import { ProjectStore } from '../src/project-store.ts';
 import { readV9Archive } from '../src/v9-archive.ts';
 import { previewV9Migration, saveV9Migration } from '../src/v9-migration.ts';
@@ -13,13 +15,83 @@ const exportButton = element<HTMLButtonElement>('export');
 const status = element('status');
 const image = element<HTMLImageElement>('image');
 const sprites = element('sprites');
+const reload = element<HTMLButtonElement>('reload');
+const undo = element<HTMLButtonElement>('undo');
+const redo = element<HTMLButtonElement>('redo');
+const spriteName = element<HTMLInputElement>('sprite-name');
+const spriteCategory = element<HTMLInputElement>('sprite-category');
+const spriteDescription = element<HTMLTextAreaElement>('sprite-description');
+const sceneX = element<HTMLInputElement>('scene-x');
+const sceneY = element<HTMLInputElement>('scene-y');
+const sceneZ = element<HTMLInputElement>('scene-z');
+const sceneVisible = element<HTMLInputElement>('scene-visible');
+const sceneLocked = element<HTMLInputElement>('scene-locked');
+const agentFile = element<HTMLInputElement>('agent-file');
+const applyAgent = element<HTMLButtonElement>('apply-agent');
+const cancelAgent = element<HTMLButtonElement>('cancel-agent');
+let agentPending: { document: ProjectDocument; preview: ReturnType<typeof previewV9AgentAnnotations> } | undefined;
 let store: ProjectStore;
+let bus: CommandBus;
 let pending: Awaited<ReturnType<typeof previewV9Migration>> | undefined;
-let opened: { document: ProjectDocument; bytes: ReadonlyMap<string, Blob> } | undefined;
+let opened: Awaited<ReturnType<ProjectStore['load']>>;
 let selectedId: string | undefined;
 let previewUrl: string | undefined;
 let busy = false;
 let ready = false;
+
+function timelineId() {
+  const key = 'sprite-v10-workbench-history';
+  const fresh = crypto.randomUUID();
+  try {
+    const stored = sessionStorage.getItem(key);
+    if (stored) return stored;
+    sessionStorage.setItem(key, fresh);
+  } catch { /* Local editing still works with a temporary timeline. */ }
+  return fresh;
+}
+
+function historyAvailable(direction: 'undo' | 'redo') {
+  const entry = opened?.history?.[direction].at(-1);
+  return entry?.revision === opened?.document.revision && Boolean(entry &&
+    Date.now() - entry.createdAt < 30 * 24 * 60 * 60 * 1000);
+}
+
+function describeFailure(result: Extract<CommandResult, { ok: false }>) {
+  if (result.error.conflict) return '项目在别处发生过更改。请选择「重新读取」，再核对并应用修改。';
+  if (result.error.code === 'empty-history') return '当前没有可操作的历史记录。';
+  return result.error.cause ?? result.error.message;
+}
+
+async function applyCommand(projectId: string, operation: () => Promise<CommandResult>, done: string) {
+  const result = await operation();
+  if (!result.ok) {
+    say(describeFailure(result), true);
+    return;
+  }
+  try { await openSaved(projectId); }
+  catch { say('修改已保存，但界面未能刷新。请选择「重新读取」。', true); return; }
+  say(done);
+}
+
+function showAgentReview() {
+  const preview = agentPending?.preview;
+  element('agent-review').hidden = !preview;
+  element('agent-summary').textContent = preview
+    ? preview.edits.length + ' 项可应用 · ' + preview.warnings.length + ' 条提示' : '';
+  const warnings = element('agent-warnings');
+  warnings.replaceChildren();
+  for (const warning of preview?.warnings ?? []) {
+    const entry = document.createElement('li');
+    const labels = {
+      'unknown-target': '找不到唯一素材',
+      'duplicate-target': '重复目标已跳过',
+      'unresolved-relation': '无法映射的关系',
+      'invalid-field': '字段无效，已保留原值'
+    };
+    entry.textContent = [warning.legacyId, labels[warning.code]].filter(Boolean).join(' · ');
+    warnings.append(entry);
+  }
+}
 
 function say(text: string, error = false) {
   status.textContent = text;
@@ -29,7 +101,17 @@ function say(text: string, error = false) {
 function controls() {
   zip.disabled = orphans.disabled = projects.disabled = !ready || busy;
   save.disabled = !ready || busy || !pending;
-  exportButton.disabled = !ready || busy || Boolean(pending) || !opened || !opened.document.assets.length;
+  const saved = ready && !busy && !pending && Boolean(opened);
+  exportButton.disabled = !saved || !opened?.document.assets.length;
+  reload.disabled = !saved;
+  agentFile.disabled = !saved;
+  applyAgent.disabled = !saved || !agentPending?.preview.edits.length;
+  cancelAgent.disabled = !saved || !agentPending;
+  undo.disabled = !saved || !historyAvailable('undo');
+  redo.disabled = !saved || !historyAvailable('redo');
+  element<HTMLFieldSetElement>('metadata-fields').disabled = !saved || !selectedId;
+  element<HTMLFieldSetElement>('scene-fields').disabled = !saved || !selectedId ||
+    !opened?.document.sceneLayout.items[selectedId];
 }
 
 async function run(message: string, operation: () => Promise<void>) {
@@ -61,6 +143,20 @@ function showPreview(id?: string) {
     element('selection').textContent = asset.name + (asset.sourceRect
       ? ' · ' + asset.sourceRect.width + ' × ' + asset.sourceRect.height + ' px' : ' · 来源范围未知');
   } else element('selection').textContent = '选择素材查看裁切图。';
+  const annotation = element('annotation');
+  annotation.hidden = !asset?.agentAnnotation;
+  annotation.textContent = asset?.agentAnnotation
+    ? ['Agent 标注', ...asset.agentAnnotation.tags].join(' · ') : '';
+  spriteName.value = asset?.name ?? '';
+  spriteCategory.value = asset?.category ?? '';
+  spriteDescription.value = asset?.description ?? '';
+  const scene = id ? opened?.document.sceneLayout.items[id] : undefined;
+  sceneX.value = scene ? String(scene.position.x) : '';
+  sceneY.value = scene ? String(scene.position.y) : '';
+  sceneZ.value = scene ? String(scene.zIndex) : '';
+  sceneVisible.checked = scene?.visible ?? false;
+  sceneLocked.checked = scene?.locked ?? false;
+  controls();
 }
 
 function render(warnings: readonly MigrationWarning[], skipped: number) {
@@ -110,9 +206,11 @@ async function refreshProjects(selected = '') {
 }
 
 async function openSaved(projectId: string) {
-  const snapshot = await store.load(projectId);
+  const snapshot = await store.load(projectId, bus.historyId);
   if (!snapshot) throw new Error('找不到该项目。');
   pending = undefined;
+  agentPending = undefined;
+  showAgentReview();
   opened = snapshot;
   const metadata = snapshot.document.migrationMetadata;
   render(metadata?.warnings ?? [], metadata?.idMap.filter(item => item.status !== 'mapped').length ?? 0);
@@ -126,7 +224,9 @@ zip.addEventListener('change', () => {
     const archive = await readV9Archive(file);
     const preview = await previewV9Migration(archive.manifest, archive.files, { includeOrphans });
     pending = preview;
-    opened = { document: preview.project, bytes: preview.binaries };
+    agentPending = undefined;
+    showAgentReview();
+    opened = { document: preview.project, bytes: preview.binaries, history: undefined };
     projects.value = '';
     render(preview.report.warnings, preview.report.quarantined.length);
     say('预览已就绪。确认迁移报告后可保存为 V10 项目。');
@@ -155,6 +255,104 @@ save.addEventListener('click', () => {
   });
 });
 
+element<HTMLFormElement>('metadata-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const snapshot = opened?.document;
+  const id = selectedId;
+  const asset = snapshot?.assets.find(item => item.id === id);
+  if (!snapshot || !id || !asset || pending) return;
+  const name = spriteName.value.trim();
+  const category = spriteCategory.value.trim() || 'uncategorized';
+  const description = spriteDescription.value;
+  if (!name) { say('请输入素材名称。', true); return; }
+  if (name === asset.name && category === asset.category && description === (asset.description ?? '')) {
+    say('素材属性没有变化。');
+    return;
+  }
+  void run('正在保存素材属性…', () => {
+    const patch = { name, category, ...(description !== (asset.description ?? '') ? { description } : {}) };
+    const command = bus.prepareSpriteProperties(snapshot, [{ spriteId: id, patch }]);
+    return applyCommand(snapshot.projectId, () => bus.dispatch(command), '素材属性已保存。');
+  });
+});
+
+element<HTMLFormElement>('scene-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const snapshot = opened?.document;
+  const id = selectedId;
+  if (!snapshot || !id || pending) return;
+  const item = snapshot.sceneLayout.items[id];
+  if (!item) return;
+  const position = { x: sceneX.valueAsNumber, y: sceneY.valueAsNumber };
+  const zIndex = sceneZ.valueAsNumber;
+  const visible = sceneVisible.checked;
+  const locked = sceneLocked.checked;
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isSafeInteger(zIndex)) {
+    say('请输入有效的场景坐标和整数层级顺序。', true);
+    return;
+  }
+  const moved = position.x !== item.position.x || position.y !== item.position.y;
+  const patch = {
+    ...(moved ? { position } : {}),
+    ...(zIndex !== item.zIndex ? { zIndex } : {}),
+    ...(visible !== item.visible ? { visible } : {}),
+    ...(locked !== item.locked ? { locked } : {})
+  };
+  if (!Object.keys(patch).length) { say('场景属性没有变化。'); return; }
+  if (moved && item.locked && locked) { say('素材位置已锁定。请先取消锁定。', true); return; }
+  void run('正在保存场景属性…', () => {
+    const command = bus.prepareSceneItemUpdates(snapshot, [{ spriteId: id, patch }]);
+    return applyCommand(snapshot.projectId, () => bus.dispatch(command), '场景属性已保存。');
+  });
+});
+
+for (const direction of ['undo', 'redo'] as const) {
+  element<HTMLButtonElement>(direction).addEventListener('click', () => {
+    const projectId = opened?.document.projectId;
+    if (!projectId || pending) return;
+    const label = direction === 'undo' ? '撤销' : '重做';
+    void run('正在' + label + '…', () => applyCommand(projectId, () => bus[direction](projectId), '已' + label + '。'));
+  });
+}
+
+reload.addEventListener('click', () => {
+  const projectId = opened?.document.projectId;
+  if (!projectId || pending) return;
+  void run('正在重新读取…', async () => { await openSaved(projectId); say('已重新读取项目。'); });
+});
+
+agentFile.addEventListener('change', () => {
+  const file = agentFile.files?.[0];
+  const snapshot = opened?.document;
+  if (!file || !snapshot || pending) return;
+  agentPending = undefined;
+  showAgentReview();
+  void run('正在核对 Agent 标注…', async () => {
+    if (file.size > 20 * 1024 ** 2) throw new Error('Agent JSON 文件超过 20 MiB。');
+    const payload: unknown = JSON.parse(await file.text());
+    const preview = previewV9AgentAnnotations(snapshot, payload);
+    agentPending = { document: snapshot, preview };
+    showAgentReview();
+    say('Agent 标注预览已就绪。确认后可应用。');
+  }).finally(() => { agentFile.value = ''; });
+});
+
+applyAgent.addEventListener('click', () => {
+  const draft = agentPending;
+  if (!draft) return;
+  void run('正在应用 Agent 标注…', () => {
+    const commandId = bus.prepareAgentAnnotationImport(draft.document, draft.preview.edits);
+    return applyCommand(draft.document.projectId, () => bus.dispatch(commandId), 'Agent 标注已应用。');
+  });
+});
+
+cancelAgent.addEventListener('click', () => {
+  agentPending = undefined;
+  showAgentReview();
+  controls();
+  say('已取消标注预览。');
+});
+
 exportButton.addEventListener('click', () => {
   const snapshot = opened;
   if (!snapshot) return;
@@ -175,6 +373,7 @@ void (async () => {
   controls();
   try {
     store = await ProjectStore.open();
+    bus = new CommandBus(store, () => {}, timelineId());
     await refreshProjects();
     ready = true;
     say('请选择 V9 场景 ZIP，或打开已保存项目。');

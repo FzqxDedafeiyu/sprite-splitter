@@ -30,7 +30,8 @@ const v9Fixture = await build({
   entryPoints: [fileURLToPath(new URL('./v9-archive.browser.ts', import.meta.url))],
   bundle: true, write: false, format: 'esm'
 });
-const agentFixture = await readFile(new URL('../../docs/v10/phase-0/results/A-009-agent-json-roundtrip/agent_result.json', import.meta.url));
+const agentFixturePath = new URL('../../docs/v10/phase-0/results/A-009-agent-json-roundtrip/agent_result.json', import.meta.url);
+const agentFixture = await readFile(agentFixturePath);
 const v9ArchivePath = new URL('../../docs/v10/phase-0/results/A-010-v9-export-check.zip', import.meta.url);
 const v9Archive = await readFile(v9ArchivePath);
 
@@ -228,6 +229,20 @@ try {
   await waitFor(async () => (await appStatus())?.includes('已保存为 V10'), 'project save');
   const savedProjectId = await app.evaluate('document.querySelector("#projects").value');
   if (!savedProjectId) throw new Error('Missing saved workbench project ID');
+  const original = await app.evaluate(`({
+    name: document.querySelector('#sprite-name').value,
+    x: document.querySelector('#scene-x').valueAsNumber
+  })`);
+  await app.evaluate(`(() => {
+    document.querySelector('#sprite-name').value = '验收改名';
+    document.querySelector('#metadata-form').requestSubmit();
+  })()`);
+  await waitFor(async () => (await appStatus())?.includes('素材属性已保存'), 'metadata edit');
+  await app.evaluate(`(() => {
+    document.querySelector('#scene-x').value = ${JSON.stringify(String(original.x + 17))};
+    document.querySelector('#scene-form').requestSubmit();
+  })()`);
+  await waitFor(async () => (await appStatus())?.includes('场景属性已保存'), 'scene edit');
   await app.reload();
   await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'workbench reload');
   await app.evaluate(`(() => {
@@ -239,13 +254,45 @@ try {
   if (await countLabel() !== '30 个') throw new Error('Reopened workbench omitted the asset count');
   const reopenedId = await app.evaluate('document.querySelector("#sprites button").dataset.spriteId');
   if (reopenedId !== expectedId) throw new Error('Reopened workbench changed sprite identity');
+  const fieldsMatch = (name, x) => app.evaluate(`(
+    document.querySelector('#sprite-name').value === ${JSON.stringify(name)} &&
+    document.querySelector('#scene-x').valueAsNumber === ${JSON.stringify(x)}
+  )`);
+  if (!await fieldsMatch('验收改名', original.x + 17)) throw new Error('Edits were not persisted after reload');
+  async function historyAction(action, label, name, x) {
+    await app.evaluate(`document.querySelector('#${action}').click()`);
+    await waitFor(async () => (await appStatus()) === label && await fieldsMatch(name, x), 'workspace ' + action);
+  }
+  await historyAction('undo', '已撤销。', '验收改名', original.x);
+  await historyAction('undo', '已撤销。', original.name, original.x);
+  await historyAction('redo', '已重做。', '验收改名', original.x);
+  await historyAction('redo', '已重做。', '验收改名', original.x + 17);
+  await app.selectFile('#agent-file', fileURLToPath(agentFixturePath));
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注预览已就绪'), 'agent preview');
+  const canApply = await app.evaluate(`(
+    document.querySelector('#agent-summary').textContent.includes('30 项可应用') &&
+    document.querySelector('#annotation').hidden &&
+    !document.querySelector('#apply-agent').disabled
+  )`);
+  if (!canApply) throw new Error('Agent apply changed data before approval or did not resolve 30 targets');
+  await app.evaluate('document.querySelector("#apply-agent").click()');
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注已应用'), 'agent apply');
+  if (!await app.evaluate('document.querySelector("#annotation").textContent.includes("浮岛")')) {
+    throw new Error('Applied Agent tags not visible');
+  }
+  await historyAction('undo', '已撤销。', '验收改名', original.x + 17);
+  if (!await app.evaluate('document.querySelector("#annotation").hidden')) throw new Error('Undo retained applied tags');
+  await historyAction('redo', '已重做。', '验收改名', original.x + 17);
+  if (!await app.evaluate('document.querySelector("#annotation").textContent.includes("浮岛")')) {
+    throw new Error('Redo did not restore Agent tags');
+  }
   await app.downloads(profile);
   await app.evaluate('document.querySelector("#export").click()');
   await waitFor(async () => (await appStatus())?.includes('兼容 ZIP 已生成'), 'workbench export');
   const downloaded = await waitFor(async () => (await readdir(profile)).find(name => name.endsWith('-v9.zip')), 'downloaded V9 archive');
   const output = await readFile(join(profile, downloaded));
   if (output.length < 22 || output.readUInt32LE(0) !== 0x04034b50) throw new Error('Invalid workbench download');
-  const workbench = { visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const workbench = { agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);
