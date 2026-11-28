@@ -1,3 +1,4 @@
+import { agentTaskSource, exportAgentTask } from '../src/agent-task.ts';
 import { cropSourcePng, openSourceBitmap, previewSourceProject } from '../src/source-project.ts';
 import { sameValue } from '../src/project.ts';
 import { bindCropEditor } from './crop-editor.ts';
@@ -31,6 +32,7 @@ const sceneY = element<HTMLInputElement>('scene-y');
 const sceneZ = element<HTMLInputElement>('scene-z');
 const sceneVisible = element<HTMLInputElement>('scene-visible');
 const sceneLocked = element<HTMLInputElement>('scene-locked');
+const exportAgent = element<HTMLButtonElement>('export-agent');
 const agentFile = element<HTMLInputElement>('agent-file');
 const applyAgent = element<HTMLButtonElement>('apply-agent');
 const cancelAgent = element<HTMLButtonElement>('cancel-agent');
@@ -149,6 +151,7 @@ function controls() {
   const saved = ready && !busy && !pending && Boolean(opened);
   exportButton.disabled = !saved || !opened?.document.assets.length;
   reload.disabled = !saved;
+  exportAgent.disabled = !saved || !opened || !agentTaskSource(opened.document);
   agentFile.disabled = !saved;
   applyAgent.disabled = !saved || !agentPending?.preview.edits.length;
   cancelAgent.disabled = !saved || !agentPending;
@@ -441,17 +444,31 @@ cancelAgent.addEventListener('click', () => {
   say('已取消标注预览。');
 });
 
+function download(archive: Blob, source: string, suffix: string) {
+  const url = URL.createObjectURL(archive);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = source.replace(/[\\/:*?"<>|]/g, '_') + suffix;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+exportAgent.addEventListener('click', () => {
+  const snapshot = opened;
+  if (!snapshot || pending) return;
+  void run('正在生成 Agent 任务包…', async () => {
+    const archive = await exportAgentTask(snapshot.document, snapshot.bytes);
+    download(archive, snapshot.document.sourceImages[0].filename, '_agent_task_v2.zip');
+    say('Agent 任务包已生成，包含 ' + snapshot.document.assets.length + ' 个候选素材。');
+  });
+});
+
 exportButton.addEventListener('click', () => {
   const snapshot = opened;
   if (!snapshot) return;
   void run('正在生成兼容 ZIP…', async () => {
     const { archive } = await exportV9Scene(snapshot.document, snapshot.bytes);
-    const url = URL.createObjectURL(archive);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = (snapshot.document.sourceImages[0]?.filename ?? 'scene').replace(/[\\/:*?"<>|]/g, '_') + '-v9.zip';
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    download(archive, snapshot.document.sourceImages[0]?.filename ?? 'scene', '-v9.zip');
     say('V9 兼容 ZIP 已生成。');
   });
 });

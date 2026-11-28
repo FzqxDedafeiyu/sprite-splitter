@@ -1,3 +1,4 @@
+import { readV9Zip } from '../src/v9-archive.ts';
 import { buildWorkbench } from '../workbench/build.mjs';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { createServer } from 'node:http';
@@ -286,6 +287,9 @@ try {
   if (!await app.evaluate('document.querySelector("#annotation").textContent.includes("浮岛")')) {
     throw new Error('Redo did not restore Agent tags');
   }
+  if (!await app.evaluate('document.querySelector("#export-agent").disabled')) {
+    throw new Error('A migrated project without original pixels offered an Agent task export');
+  }
   await app.downloads(profile);
   await app.evaluate('document.querySelector("#export").click()');
   await waitFor(async () => (await appStatus())?.includes('兼容 ZIP 已生成'), 'workbench export');
@@ -371,13 +375,57 @@ try {
   await waitFor(async () => (await appStatus()) === '已重做。', 'source crop redo');
   if (!await cropMatches()) throw new Error('Crop redo lost pixels');
 
+  await app.evaluate('document.querySelector("#export-agent").click()');
+  await waitFor(async () => (await appStatus())?.includes('包含 2 个候选素材'), 'Agent task download');
+  const taskFile = await waitFor(async () => (await readdir(profile)).find(name => name.endsWith('_agent_task_v2.zip')), 'Agent task file');
+  const taskEntries = await readV9Zip(new Blob([await readFile(join(profile, taskFile))]));
+  if (String([...taskEntries.keys()]) !== 'source.png,agent_task.json,AGENT_PROMPT.txt') {
+    throw new Error('Unexpected Agent task ZIP entries');
+  }
+  const task = JSON.parse(await taskEntries.get('agent_task.json').text());
+  const sourceHeader = Buffer.from(await taskEntries.get('source.png').slice(0, 24).arrayBuffer());
+  if (task.schema !== 'spatial-scene-agent-task/v2' || task.projectId !== sourceProjectId ||
+    sourceHeader.readUInt32BE(16) !== 50 || sourceHeader.readUInt32BE(20) !== 26 ||
+    task.instructions !== await taskEntries.get('AGENT_PROMPT.txt').text() ||
+    String(task.sprites.map(row => row.sprite_id)) !== String(sourceIds) ||
+    String(Object.values(task.sprites[0].bbox)) !== '1,3,18,18') {
+    throw new Error('Agent task did not contain the current source and persistent sprite IDs');
+  }
+  const taskResult = { schema: 'spatial-scene-agent-result/v2', projectId: task.projectId,
+    source: task.source, sprites: [{ sprite_id: sourceIds[0], tags: ['自动验证'], name: '待复核' }] };
+  const wrongTaskPath = join(profile, 'wrong-agent-project.json');
+  await writeFile(wrongTaskPath, JSON.stringify({ ...taskResult, projectId: savedProjectId }));
+  await app.selectFile('#agent-file', wrongTaskPath);
+  await waitFor(async () => (await appStatus())?.includes('来自另一个项目'), 'Agent result from wrong project rejection');
+  const wrongImagePath = join(profile, 'wrong-agent-source.json');
+  await writeFile(wrongImagePath, JSON.stringify({ ...taskResult, source: { ...task.source, contentHash: 'wrong' } }));
+  await app.selectFile('#agent-file', wrongImagePath);
+  await waitFor(async () => (await appStatus())?.includes('与项目源图不一致'), 'Agent result from wrong source rejection');
+  const taskResultPath = join(profile, 'agent-result.json');
+  await writeFile(taskResultPath, JSON.stringify(taskResult));
+  await app.selectFile('#agent-file', taskResultPath);
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注预览已就绪'), 'Agent task result preview');
+  await app.evaluate('document.querySelector("#apply-agent").click()');
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注已应用'), 'Agent result round trip');
+  const tagsVisible = () => app.evaluate('document.querySelector("#annotation").textContent.includes("自动验证")');
+  if (!await tagsVisible() || await app.evaluate('document.querySelector("#sprite-name").value') !== 'sprite_001') {
+    throw new Error('Agent task did not apply tags while keeping the explicitly edited properties');
+  }
+  const partialTaskPath = join(profile, 'partial-agent-result.json');
+  await writeFile(partialTaskPath, JSON.stringify({ ...taskResult, sprites: [{ sprite_id: sourceIds[0], confidence: 0.8 }] }));
+  await app.selectFile('#agent-file', partialTaskPath);
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注预览已就绪'), 'partial Agent annotation preview');
+  await app.evaluate('document.querySelector("#apply-agent").click()');
+  await waitFor(async () => (await appStatus())?.includes('Agent 标注已应用'), 'partial annotation apply');
+  if (!await tagsVisible()) throw new Error('An omitted field overwrote prior tags');
+
   await app.evaluate('document.querySelector("#detect-area").value = 200; document.querySelector("#detect-again").click()');
   await waitFor(async () => (await appStatus())?.includes('没有识别到素材'), 'source rerun with updated settings');
   if (await countLabel() !== '0 个' || await app.evaluate('document.querySelector("#projects").value')) {
     throw new Error('Source rerun overwrote the saved selection instead of opening a new draft');
   }
 
-  const workbench = { sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const workbench = { agentTaskRoundTrip: 'pass', sourceManualCrop: 'pass', sourceAutoDetection: 'pass', sourceProjectReopen: 'pass', agentPreviewApplyUndo: 'pass', editableMetadata: 'pass', editableScene: 'pass', historyAfterReload: 'pass', visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);

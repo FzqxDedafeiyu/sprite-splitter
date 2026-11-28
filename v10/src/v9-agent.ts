@@ -13,15 +13,22 @@ export function previewV9AgentAnnotations(project: ProjectDocument, input: unkno
   invariant(envelope.schema === 'spatial-scene-agent-result/v2' || envelope.schema === 'sprite-agent-result/v1',
     'Unsupported V9 Agent result schema');
   invariant(Array.isArray(envelope.sprites), 'V9 Agent result is missing sprites');
+  if (Object.hasOwn(envelope, 'projectId')) {
+    invariant(envelope.projectId === project.projectId, 'Agent 标注结果来自另一个项目。');
+  }
   if (envelope.source !== undefined) {
     const source = object(envelope.source);
+    if (Object.hasOwn(source, 'contentHash')) {
+      invariant(typeof source.contentHash === 'string' && project.sourceImages.length === 1 &&
+        source.contentHash === project.sourceImages[0].resourceVersion?.contentHash, 'Agent 标注结果与项目源图不一致。');
+    }
     if (Object.hasOwn(source, 'width') || Object.hasOwn(source, 'height')) {
       invariant(typeof source.width === 'number' && typeof source.height === 'number' &&
         source.width === project.sceneLayout.world.width && source.height === project.sceneLayout.world.height,
         'V9 Agent result source dimensions do not match the project');
     }
   }
-  const active = new Set(project.assets.map(asset => asset.id));
+  const active = new Map(project.assets.map(asset => [asset.id, asset]));
   const identities = new Map<string, Set<string>>();
   const bind = (legacyId: string, id: string) => {
     if (!active.has(id)) return;
@@ -34,7 +41,10 @@ export function previewV9AgentAnnotations(project: ProjectDocument, input: unkno
   for (const record of project.migrationMetadata?.idMap ?? []) {
     if (record.status === 'mapped') bind(record.legacyId, record.spriteId);
   }
-  for (const asset of project.assets) if (asset.legacyId) bind(asset.legacyId, asset.id);
+  for (const asset of project.assets) {
+    bind(asset.id, asset.id);
+    if (asset.legacyId) bind(asset.legacyId, asset.id);
+  }
   const resolve = (legacyId: string) => {
     const candidates = identities.get(legacyId);
     return !blocked.has(legacyId) && candidates?.size === 1 ? [...candidates][0] : undefined;
@@ -67,7 +77,8 @@ export function previewV9AgentAnnotations(project: ProjectDocument, input: unkno
       legacyFields.invalidTags = value.tags;
       warnings.push({ legacyId, code: 'invalid-field', detail: 'Invalid tags preserved for review' });
     }
-    const annotation: AgentAnnotation = { tags: tags?.slice() ?? [] };
+    const previous = active.get(spriteId)?.agentAnnotation;
+    const annotation: AgentAnnotation = { ...previous, tags: tags?.slice() ?? previous?.tags.slice() ?? [] };
     if (typeof value.confidence === 'number' && Number.isFinite(value.confidence) &&
       value.confidence >= 0 && value.confidence <= 1) annotation.confidence = value.confidence;
     else if (value.confidence !== undefined && value.confidence !== null) {
@@ -96,7 +107,9 @@ export function previewV9AgentAnnotations(project: ProjectDocument, input: unkno
       }
       legacyFields.originalRelations = structuredClone(value.relations);
     }
-    if (Object.keys(legacyFields).length) annotation.legacyExtensions = structuredClone(legacyFields);
+    if (Object.keys(legacyFields).length) {
+      annotation.legacyExtensions = structuredClone({ ...previous?.legacyExtensions, ...legacyFields });
+    }
     edits.push({ spriteId, annotation });
     proposals.push({ spriteId, relations, legacyFields });
   }
