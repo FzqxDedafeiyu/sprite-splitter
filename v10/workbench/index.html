@@ -28,6 +28,7 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 #summary ul{margin:.35rem 0 0;padding-left:1.2rem;max-height:170px;overflow:auto}
 .workspace{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:1rem}
 .workspace h2{padding:.75rem 1rem;border-bottom:1px solid #303a49}
+#asset-count{display:inline-block;margin-inline-start:.55rem;padding:.05rem .5rem;border:1px solid #475c78;border-radius:999px;background:#243145;color:#c8defc;font-size:.85rem;font-variant-numeric:tabular-nums}
 #sprites{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto}
 #sprites button{display:block;width:100%;text-align:left;white-space:normal;border:0;border-bottom:1px solid #303a49;border-radius:0;background:transparent}
 #sprites button[aria-current="true"]{background:#283447;color:#cae0ff}
@@ -59,7 +60,7 @@ main{max-width:1340px;margin:auto;padding:1.4rem 1.6rem}
 <details id="report"><summary>查看迁移提示</summary><ul id="warnings"></ul></details>
 </section>
 <div class="workspace">
-<section class="panel"><h2>素材</h2><ul id="sprites"></ul></section>
+<section class="panel"><h2>素材 <output id="asset-count" aria-label="素材总数">0 个</output></h2><ul id="sprites"></ul></section>
 <section class="panel">
 <h2>素材预览</h2>
 <div id="preview"><img id="image" alt="" hidden></div>

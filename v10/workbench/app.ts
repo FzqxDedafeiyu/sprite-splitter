@@ -65,9 +65,10 @@ function showPreview(id?: string) {
 
 function render(warnings: readonly MigrationWarning[], skipped: number) {
   const project = opened?.document;
+  element('asset-count').textContent = (project?.assets.length ?? 0) + ' 个';
   const name = project?.sourceImages[0]?.filename ?? '场景素材';
   element('summary').hidden = !project;
-  element('summary-text').textContent = project ? [name, project.assets.length + ' 个素材',
+  element('summary-text').textContent = project ? [name,
     skipped ? skipped + ' 条已隔离' : '', pending ? '迁移预览' : 'V10 本地项目'].filter(Boolean).join(' · ') : '';
   const list = element('warnings');
   list.replaceChildren();

@@ -214,8 +214,11 @@ try {
   tabs.push(app);
   const appStatus = () => app.evaluate('document.querySelector("#status")?.textContent');
   await waitFor(async () => (await appStatus())?.includes('请选择 V9'), 'workbench ready');
+  const countLabel = () => app.evaluate('document.querySelector("#asset-count").textContent');
+  if (await countLabel() !== '0 个') throw new Error('Empty workbench should show a zero asset count');
   await app.selectFile('#zip', fileURLToPath(v9ArchivePath));
   await waitFor(async () => (await appStatus())?.includes('预览已就绪'), 'migration preview');
+  if (await countLabel() !== '30 个') throw new Error('Migration preview omitted the asset count');
   const expectedId = await app.evaluate(`(() => {
     const items = document.querySelectorAll('#sprites button');
     if (items.length !== 30 || document.querySelector('#save').disabled) throw Error('Preview table or save unavailable');
@@ -233,6 +236,7 @@ try {
     select.dispatchEvent(new Event('change'));
   })()`);
   await waitFor(async () => (await appStatus())?.includes('已打开 V10'), 'project reopen');
+  if (await countLabel() !== '30 个') throw new Error('Reopened workbench omitted the asset count');
   const reopenedId = await app.evaluate('document.querySelector("#sprites button").dataset.spriteId');
   if (reopenedId !== expectedId) throw new Error('Reopened workbench changed sprite identity');
   await app.downloads(profile);
@@ -241,7 +245,7 @@ try {
   const downloaded = await waitFor(async () => (await readdir(profile)).find(name => name.endsWith('-v9.zip')), 'downloaded V9 archive');
   const output = await readFile(join(profile, downloaded));
   if (output.length < 22 || output.readUInt32LE(0) !== 0x04034b50) throw new Error('Invalid workbench download');
-  const workbench = { actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
+  const workbench = { visibleAssetCount: 'pass', actualFileInput: 'pass', savedAndReopened: 'pass', exportedDownload: 'pass' };
 
   const first = await openTab(endpoint, url);
   tabs.push(first);
