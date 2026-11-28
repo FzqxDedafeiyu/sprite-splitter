@@ -7,9 +7,9 @@ export type ChangeSet = {
   writeEntities: readonly string[];
   resources: readonly string[];
 };
-type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number };
-type Failed = { ok: false; commandId: string; affectedIds: string[]; projectRevision: number;
-  error: { code: string; message: string; retryable: boolean; conflict?: { kind: ConflictError['kind']; target: string } } };
+type Committed = { ok: true; commandId: string; affectedIds: string[]; projectRevision: number; publishError?: string };
+type Failed = { ok: false; commandId: string; affectedIds: string[]; baseRevision: number | null; attemptedRevision: number | null; attempts: number;
+  error: { code: string; message: string; retryable: boolean; cause?: string; conflict?: { kind: ConflictError['kind']; target: string } } };
 export type CommandResult = Committed | Failed;
 type Operation = {
   affectedIds: readonly string[];
@@ -19,7 +19,6 @@ type Operation = {
 };
 type Captured = {
   projectId: string;
-  before: ProjectDocument;
   operation: Operation;
   expectation: CommitExpectation;
 };
@@ -47,22 +46,22 @@ const propertyNames = new Set(['name', 'category', 'description', 'groupName']);
 const spriteKey = (id: string) => 'spriteAsset:' + id;
 
 export class CommandBus {
-  // The caller retains an opaque ID; the bus owns the snapshot and captured expectations.
+  // The caller retains an opaque ID; the bus owns only the patch and captured expectations.
   #plans = new Map<string, Captured>();
   #queue = Promise.resolve();
 
-  constructor(private readonly persistence: ProjectStore,
+  constructor(private readonly persistence: Pick<ProjectStore, 'load' | 'commit'>,
     private readonly publish: (document: ProjectDocument) => void) {}
 
   prepareSpriteProperties(snapshot: ProjectDocument, changes: readonly { spriteId: string; patch: PropertyPatch }[]): string {
-    const before = structuredClone(snapshot);
+    invariant(this.#plans.size < 128, 'Too many pending commands');
     const patches = new Map<string, PropertyPatch>();
     for (const { spriteId, patch } of changes) {
       invariant(!patches.has(spriteId), 'Duplicate sprite in property command: ' + spriteId);
       const entries = Object.entries(patch);
       invariant(entries.length && entries.every(([key, value]) => propertyNames.has(key) &&
         (typeof value === 'string' || (value === null && key === 'groupName'))), 'Invalid sprite property patch');
-      invariant(before.assets.some(asset => asset.id === spriteId), 'Unknown sprite: ' + spriteId);
+      invariant(snapshot.assets.some(asset => asset.id === spriteId), 'Unknown sprite: ' + spriteId);
       patches.set(spriteId, { ...patch });
     }
     invariant(patches.size, 'Property command has no targets');
@@ -85,8 +84,8 @@ export class CommandBus {
       }
     };
     const commandId = crypto.randomUUID();
-    this.#plans.set(commandId, { projectId: before.projectId, before, operation,
-      expectation: captureExpectations(before, operation.changes) });
+    this.#plans.set(commandId, { projectId: snapshot.projectId, operation,
+      expectation: captureExpectations(snapshot, operation.changes) });
     return commandId;
   }
 
@@ -94,7 +93,7 @@ export class CommandBus {
 
   async dispatch(commandId: string): Promise<CommandResult> {
     const plan = this.#plans.get(commandId);
-    if (!plan) return { ok: false, commandId, affectedIds: [], projectRevision: 0,
+    if (!plan) return { ok: false, commandId, affectedIds: [], baseRevision: null, attemptedRevision: null, attempts: 0,
       error: { code: 'unknown-command', message: 'Command was cancelled or already dispatched', retryable: false } };
     this.#plans.delete(commandId);
     const task = this.#queue.then(() => this.#execute(commandId, plan));
@@ -103,42 +102,58 @@ export class CommandBus {
   }
 
   async #execute(commandId: string, plan: Captured): Promise<CommandResult> {
-    const { operation, expectation, before, projectId } = plan;
+    const { operation, expectation, projectId } = plan;
     const affectedIds = [...operation.affectedIds];
-    let observed = before.revision;
-    const attempt = async (document: ProjectDocument, checks: CommitExpectation) => {
-      const next = structuredClone(document);
-      operation.apply(next);
-      next.revision++;
-      await this.persistence.commit(next, checks);
-      return next;
-    };
+    let attemptedRevision: number | null = null;
+    let attempts = 0;
+    let rebased = false;
     let committed: ProjectDocument;
     try {
-      try { committed = await attempt(before, expectation); }
-      catch (error) {
-        if (!(error instanceof ConflictError) || error.kind !== 'project-cas' || operation.rebase === 'never') throw error;
-        const latest = await this.persistence.load(projectId);
-        if (!latest) throw error;
-        observed = latest.document.revision;
-        const refreshed = captureExpectations(latest.document, operation.changes);
-        if (!sameValue(expectation.entities, refreshed.entities) || !sameValue(expectation.resources, refreshed.resources)) {
-          const changedEntity = Object.keys(expectation.entities).find(key =>
-            !sameValue(expectation.entities[key], refreshed.entities[key]));
-          if (changedEntity) throw new ConflictError('target-entity', changedEntity);
-          const changedResource = Object.keys(expectation.resources).find(key =>
-            !sameValue(expectation.resources[key], refreshed.resources[key]));
-          throw new ConflictError('resource', changedResource!);
+      while (true) {
+        const loaded = await this.persistence.load(projectId);
+        invariant(loaded, 'Project no longer exists');
+        const next = loaded.document;
+        const checks = captureExpectations(next, operation.changes);
+        for (const [key, expected] of Object.entries(expectation.entities)) {
+          if (!sameValue(expected, checks.entities[key])) throw new ConflictError('target-entity', key);
         }
-        committed = await attempt(latest.document, refreshed);
+        for (const [id, expected] of Object.entries(expectation.resources)) {
+          if (!sameValue(expected, checks.resources[id])) throw new ConflictError('resource', id);
+        }
+        if (next.revision !== expectation.projectRevision) {
+          if (operation.rebase === 'never') throw new ConflictError('project-cas', projectId);
+          rebased = true;
+        }
+        operation.apply(next);
+        next.revision++;
+        try {
+          attempts++;
+          attemptedRevision = checks.projectRevision;
+          await this.persistence.commit(next, checks);
+          committed = next;
+          break;
+        } catch (error) {
+          if (!(error instanceof ConflictError) || error.kind !== 'project-cas' ||
+              rebased || operation.rebase === 'never') throw error;
+          rebased = true;
+        }
       }
     } catch (error) {
       const conflict = error instanceof ConflictError ? { kind: error.kind, target: error.target } : undefined;
-      return { ok: false, commandId, affectedIds, projectRevision: observed,
-        error: { code: conflict?.kind ?? 'command-failed', message: String(error), retryable: false, conflict } };
+      const code = conflict?.kind ?? 'command-failed';
+      const message = {
+        'project-cas': attempts === 2 ? 'Project changed again. Reload and prepare a new command.' :
+          'Project changed. Reload and prepare a new command.',
+        'target-entity': 'A target changed. Review it before preparing a new command.',
+        resource: 'A resource changed. Reload it before preparing a new command.',
+        'command-failed': 'Command could not be completed.'
+      }[code];
+      return { ok: false, commandId, affectedIds, baseRevision: expectation.projectRevision, attemptedRevision, attempts,
+        error: { code, message, cause: String(error), retryable: code === 'project-cas', conflict } };
     }
-    // Publish only after the storage transaction completes. Publication errors are not storage rollbacks.
-    this.publish(committed);
-    return { ok: true, commandId, affectedIds, projectRevision: committed.revision };
+    const result: Committed = { ok: true, commandId, affectedIds, projectRevision: committed.revision };
+    try { this.publish(committed); }
+    catch (error) { result.publishError = String(error); }
+    return result;
   }
 }

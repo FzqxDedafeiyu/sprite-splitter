@@ -220,7 +220,44 @@ async function commandTests() {
     const noOp = await bus.dispatch(bus.prepareSpriteProperties(latest, [{ spriteId: id, patch: { name: '中文名 A' } }]));
     equal(noOp.ok, false);
     equal((await persistence.load(project.projectId))?.document.revision, 4);
-    return { atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
+    const publicationBus = new CommandBus(persistence, () => { throw new Error('subscriber failed'); });
+    const afterPublish = await publicationBus.dispatch(publicationBus.prepareSpriteProperties(latest, [
+      { spriteId: id, patch: { name: '已持久化' } }
+    ]));
+    equal(afterPublish.ok && Boolean(afterPublish.publishError), true);
+    const stable = (await persistence.load(project.projectId))!.document;
+    equal(stable.assets[0].name, '已持久化');
+    let races = 0;
+    const racing = new CommandBus({
+      load: projectId => persistence.load(projectId),
+      async commit(next, expectation) {
+        races++;
+        const current = (await persistence.load(next.projectId))!.document;
+        current.revision++;
+        current.legacyExtensions = { race: races };
+        await persistence.commit(current, { projectRevision: current.revision - 1, entities: {}, resources: {} });
+        return persistence.commit(next, expectation);
+      }
+    }, () => { throw new Error('Conflict must not publish'); });
+    const race = await racing.dispatch(racing.prepareSpriteProperties(stable, [{ spriteId: id, patch: { name: '不可覆盖' } }]));
+    equal(races, 2);
+    equal(!race.ok && [race.error.code, race.error.retryable, race.baseRevision, race.attemptedRevision, race.attempts],
+      ['project-cas', true, 5, 6, 2]);
+    equal((await persistence.load(project.projectId))?.document.assets[0].name, '已持久化');
+
+    const staleBase = (await persistence.load(project.projectId))!.document;
+    const staleBatch = bus.prepareSpriteProperties(staleBase, [
+      { spriteId: id, patch: { name: '拒绝 A' } }, { spriteId: secondId, patch: { name: '拒绝 B' } }
+    ]);
+    const other = new CommandBus(persistence, () => {});
+    const external = await other.dispatch(other.prepareSpriteProperties(staleBase, [{ spriteId: id, patch: { name: '另一标签页' } }]));
+    equal(external.ok, true);
+    const onlyFirstStale = await bus.dispatch(staleBatch);
+    equal(!onlyFirstStale.ok && onlyFirstStale.error.conflict?.target, keys[0]);
+    const final = (await persistence.load(project.projectId))!.document;
+    equal(final.assets.map(asset => asset.name), ['另一标签页', '中文名 B']);
+    equal(final.revision, staleBase.revision + 1);
+    return { publishFailure: 'pass', retryLimit: 'pass', oneStaleTarget: 'pass', atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
   } finally { persistence.close(); indexedDB.deleteDatabase(db); }
 }
 

@@ -37,7 +37,8 @@ function share(previous: unknown, next: unknown): unknown {
   return Object.freeze(Array.isArray(next) ? entries.map(([, value]) => value) : Object.fromEntries(entries));
 }
 
-export function createReactiveStore(project: ProjectDocument, ui: UIState) {
+export function createReactiveStore(project: ProjectDocument, ui: UIState,
+  onSubscriberError: (error: unknown) => void = error => console.error(error)) {
   let state = share(undefined, {
     project: { document: project, revision: project.revision },
     ui,
@@ -57,7 +58,14 @@ export function createReactiveStore(project: ProjectDocument, ui: UIState) {
     try {
       while (pending.length) {
         const snapshot = pending.shift()!;
-        for (const notify of [...subscriptions]) if (subscriptions.has(notify)) notify(snapshot);
+        for (const notify of [...subscriptions]) {
+          if (!subscriptions.has(notify)) continue;
+          try { notify(snapshot); }
+          catch (error) {
+            try { onSubscriberError(error); }
+            catch (reportError) { console.error(reportError); }
+          }
+        }
       }
     } finally {
       pending.length = 0;

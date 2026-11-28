@@ -106,7 +106,9 @@ function subscriptionTests() {
   const project = createProject();
   const ui = { activeWorkspace: 'scene', activeToolByWorkspace: { scene: 'select' },
     selectedSpriteIds: [], panels: {}, viewportByWorkspace: {} };
-  const store = createReactiveStore(project, ui);
+  const errors: unknown[] = [];
+  const store = createReactiveStore(project, ui, error => { errors.push(error); });
+  store.view.subscribe(state => state.project.revision, () => { throw new Error('listener failed'); });
   const projectEvents: number[] = [];
   let settingsEvents = 0;
   let gestureEvents = 0;
@@ -122,6 +124,7 @@ function subscriptionTests() {
   assert(store.view.snapshot().project.document.projectSettings.defaultFps === 12, 'immutable project snapshot');
   project.projectSettings.defaultFps = 12;
   store.publishPersistedProject({ ...project, revision: 2, legacyExtensions: { label: 'changed' } });
+  assert(errors.length === 1, 'isolates throwing subscriber');
   assert(settingsEvents === 0 && projectEvents.join() === '2', 'subscriptions preserve unrelated references');
   assert(gestureEvents === 1 && playbackEvents === 1, 'playback and interaction are independent');
   assert(Object.isFrozen(store.view.snapshot().ui.activeToolByWorkspace), 'immutable nested UI state');
