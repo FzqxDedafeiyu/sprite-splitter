@@ -28,3 +28,9 @@ TypeScript 严格检查通过。在 Edge 中运行真实 IndexedDB browser 测�
 使用 Node 24，在 P1-0 spike 目录执行一次 `npm ci`，设置 `V10_BROWSER` 为 Chromium 或 Edge 路径，然后从仓库根目录执行 `node v10/tests/run-browser.mjs`。可用 `V10_SPIKE_PACKAGE` 指向另一个装好依赖的 P1-0 package.json，用 `V10_BROWSER_ARTIFACTS` 把临时配置指到工作目录。运行器使用本机回环地址和全新浏览器配置。已在 Edge 验证原生 pointer capture、取消、订阅分区、两个真实标签页争用以及刷新回读。
 
 当前阶段提供运行时与自动化测试页面。生产工作区、各工具的具体 draft 命令以及多点闭合多边形仍需在编辑器接入时完成。
+
+## P1-3 首批命令
+
+`command-bus.ts` 开始接管素材基础属性更新。创建命令时从单一快照捕获实体和 Project 版本。多素材编辑提交一个事务，验证失败时整体拒绝。仅当绝对属性赋值的目标版本完全不变时，对无关 Project CAS 冲突重试一次。实体和资源冲突不重试。持久化成功后才向 Store 发布。已验证中文属性批量更新、无关提交后的安全重试、旧目标版本冲突、重复 dispatch 和空操作。
+
+当前命令入口仅支持名称、分类、说明和旧版分组标签。事务撤销重做、CompositeCommand、几何与资源命令仍属 P1-3 后续工作。

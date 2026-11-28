@@ -1,3 +1,4 @@
+import { CommandBus } from '../src/command-bus.ts';
 import type { ProjectDocument, RasterRef } from '../src/domain.ts';
 import { createProject, safeAssetPath } from '../src/project.ts';
 import { ConflictError, ProjectStore } from '../src/project-store.ts';
@@ -169,5 +170,61 @@ async function run() {
   }
 }
 
-run().then(value => { document.querySelector('#result')!.textContent = JSON.stringify(value); },
+async function commandTests() {
+  const db = 'sprite-v10-commands-' + crypto.randomUUID();
+  const persistence = await ProjectStore.open(db);
+  try {
+    const blank = createProject();
+    await persistence.create(blank);
+    const id = crypto.randomUUID();
+    const secondId = crypto.randomUUID();
+    const resourceId = crypto.randomUUID();
+    const staged = await persistence.stage(blank.projectId, [{ resourceId, revision: 1, bytes: await png() }]);
+    const [rasterResource] = staged.versions;
+    const project = structuredClone(blank);
+    project.revision = 2;
+    const ids = [id, secondId];
+    project.assets = ids.map((spriteId, index) => ({
+      id: spriteId, name: '旧名称 ' + index, category: 'prop', sourceRectStatus: 'unknown', shape: 'rectangle',
+      assetRef: 'sprites/shared.png', rasterResource, contentVersion: 1, revision: 1
+    }));
+    const keys = ids.map(spriteId => 'spriteAsset:' + spriteId);
+    for (const key of keys) project.revisionLedger.entities[key] = 1;
+    project.revisionLedger.resources[resourceId] = 1;
+    await persistence.commit(project, { projectRevision: 1, entities: {
+      [keys[0]]: { state: 'absent' }, [keys[1]]: { state: 'absent' }
+    }, resources: { [resourceId]: { state: 'absent' } } }, staged.id);
+
+    const published: Array<{ revision: number; names: string[] }> = [];
+    const bus = new CommandBus(persistence, document =>
+      published.push({ revision: document.revision, names: document.assets.map(sprite => sprite.name) }));
+    const batch = bus.prepareSpriteProperties(project, [
+      { spriteId: id, patch: { name: '中文名 A' } }, { spriteId: secondId, patch: { name: '中文名 B' } }
+    ]);
+    const conflicting = bus.prepareSpriteProperties(project, [
+      { spriteId: id, patch: { name: '过期值' } }, { spriteId: secondId, patch: { name: '整批不得写入' } }
+    ]);
+    const unrelated = structuredClone(project);
+    unrelated.revision++;
+    unrelated.legacyExtensions = { unrelated: true };
+    await persistence.commit(unrelated, { projectRevision: 2, entities: {}, resources: {} });
+    const success = await bus.dispatch(batch);
+    equal(success.ok && success.projectRevision, 4);
+    const result = await bus.dispatch(conflicting);
+    equal(!result.ok && result.error.conflict?.kind, 'target-entity');
+    const replay = await bus.dispatch(batch);
+    equal(!replay.ok && replay.error.code, 'unknown-command');
+    equal((await persistence.load(project.projectId))?.document.legacyExtensions, { unrelated: true });
+    equal(published, [{ revision: 4, names: ['中文名 A', '中文名 B'] }]);
+    const latest = (await persistence.load(project.projectId))!.document;
+    const noOp = await bus.dispatch(bus.prepareSpriteProperties(latest, [{ spriteId: id, patch: { name: '中文名 A' } }]));
+    equal(noOp.ok, false);
+    equal((await persistence.load(project.projectId))?.document.revision, 4);
+    return { atomicBatch: 'pass', safeRebase: 'pass', staleConflict: 'pass', duplicateDispatch: 'pass', noOp: 'pass' };
+  } finally { persistence.close(); indexedDB.deleteDatabase(db); }
+}
+
+Promise.all([run(), commandTests()]).then(([fixture, commands]) => {
+  const value = { ...fixture, commands };
+  document.querySelector('#result')!.textContent = JSON.stringify(value); },
   error => { document.querySelector('#result')!.textContent = JSON.stringify({ test: { error: String(error.stack ?? error) } }); });
