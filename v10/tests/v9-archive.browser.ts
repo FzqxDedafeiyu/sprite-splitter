@@ -1,3 +1,5 @@
+import { previewV9Migration, saveV9Migration } from '../src/v9-migration.ts';
+import { ProjectStore } from '../src/project-store.ts';
 import { readV9Archive, readV9Zip } from '../src/v9-archive.ts';
 import { inspectRaster } from '../src/mask.ts';
 
@@ -44,7 +46,51 @@ async function verify() {
   traversal.set([46, 46, 47], central + 46);
   await rejected(readV9Zip(new Blob([traversal])), /Unsafe or duplicate ZIP path/);
 
-  return { realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
+  const preview = await previewV9Migration(manifest, files);
+  const migrated = preview.project;
+  assert(preview.report.imported === 30 && preview.report.quarantined.length === 0, 'A-010 migration lost sprites');
+  assert(migrated.sourceImages[0]?.availability === 'missing' && !migrated.sourceImages[0].resourceVersion,
+    'Migration must preserve missing source metadata');
+  assert(migrated.assets.every(asset => !asset.mask && asset.sourceRectStatus === 'known'), 'Unexpected migrated mask');
+  assert(migrated.migrationMetadata?.idMap.filter(row => row.status === 'mapped').length === 30, 'Incomplete UUID bridge');
+
+  const row = (manifest.sprites as Array<Record<string, unknown>>)[0];
+  const sourceRect = row.sourceRect as { x: number; y: number; width: number; height: number };
+  const dupe = { ...row, id: 'duplicate', file: (manifest.sprites[1] as { file: string }).file };
+  const changedManifest = { ...manifest, sprites: [
+    { ...row, extraField: 'retained', transform: { x: 25, y: -10, scaleX: 1.2, scaleY: 0.8, rotation: 35 },
+      relations: { near_to: ['duplicate'], supports: ['missing'] } }, dupe, { ...dupe },
+    { ...row, id: 'missing', file: 'absent.png' }
+  ] };
+  const quarantine = await previewV9Migration(changedManifest, files);
+  const partial = quarantine.project;
+  assert(partial.assets.length === 1 && quarantine.report.quarantined.length === 3, 'Ambiguous or missing records were not isolated');
+  assert(partial.migrationMetadata?.idMap.filter(entry => entry.status === 'ambiguous').length === 2, 'Duplicate ID was not isolated as a set');
+  const asset = partial.assets[0];
+  assert(asset.legacyExtensions?.extraField === 'retained' && !!asset.legacyExtensions?.unresolvedRelations, 'Legacy fields were dropped');
+  const layoutItem = partial.sceneLayout.items[asset.id];
+  assert(layoutItem.position.x === sourceRect.x + 25 && layoutItem.position.y === sourceRect.y - 10 &&
+    layoutItem.transform.rotation === 35 && layoutItem.transform.scaleY === 0.8 && layoutItem.anchorSource === 'legacy-unknown' &&
+    layoutItem.relations.nearTo.length === 0, 'V9 transform, anchor or unresolved relations changed semantics');
+
+  const db = 'sprite-v10-v9-migration-' + crypto.randomUUID();
+  let store = await ProjectStore.open(db);
+  try {
+    const [resourceId, bytes] = [...preview.binaries][0];
+    const invalidPreview = { ...preview, binaries: new Map(preview.binaries) };
+    const damagedByte = new Uint8Array(await bytes.arrayBuffer());
+    damagedByte[damagedByte.length - 1] ^= 1;
+    invalidPreview.binaries.set(resourceId, new Blob([damagedByte]));
+    await rejected(saveV9Migration(invalidPreview, store), /resource:|InvalidStateError|source image could not be decoded/);
+    assert(await store.load(migrated.projectId) === undefined, 'Rejected migration created a partial project');
+    await saveV9Migration(preview, store);
+    store.close();
+    store = await ProjectStore.open(db);
+    const loaded = await store.load(migrated.projectId);
+    assert(loaded?.bytes.size === 30 && loaded.document.assets.every((item, index) =>
+      item.id === migrated.assets[index].id), 'UUID or raster was regenerated after reopen');
+  } finally { store.close(); indexedDB.deleteDatabase(db); }
+  return { v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
     corruptCrc: 'pass', truncated: 'pass', pathTraversal: 'pass' };
 }
 verify().then(value => {

@@ -179,6 +179,60 @@ export class ProjectStore {
     });
   }
 
+  async createImportedProject(document: ProjectDocument, stageId: string) {
+    const projectId = document.projectId;
+    try {
+      const snapshot = structuredClone(document);
+      validateProject(snapshot);
+      const entityVersions = entities(snapshot);
+      const resourceVersions = resources(snapshot);
+      invariant(snapshot.revision === 1 && resourceVersions.size > 0 &&
+        Object.keys(snapshot.revisionLedger.entities).length === entityVersions.size &&
+        Object.keys(snapshot.revisionLedger.resources).length === resourceVersions.size &&
+        [...entityVersions.values()].every(entity => entity.revision === 1) &&
+        [...resourceVersions.values()].every(({ version }) => version.revision === 1),
+        'Imported project must begin with initial version watermarks');
+      const tx = this.database.transaction(['projects', 'resources', 'staging'], 'readwrite');
+      await atomic(tx, async () => {
+        const projects = tx.objectStore('projects');
+        if (await result(projects.getKey(projectId)) !== undefined) throw new ConflictError('project-cas', projectId);
+        const staging = tx.objectStore('staging');
+        const stage = await result<Stage | undefined>(staging.get(stageId));
+        if (!stage || stage.projectId !== projectId || Date.now() - stage.createdAt >= lifetime ||
+            stage.records.length !== resourceVersions.size) throw new ConflictError('resource', stageId);
+        const records = new Map(stage.records.map(record => [record.version.resourceId, record]));
+        for (const [id, { version }] of resourceVersions) {
+          const record = records.get(id);
+          if (!record || !sameValue(record.version, version) || record.bytes.size !== version.byteLength) {
+            throw new ConflictError('resource', id);
+          }
+        }
+        for (const sprite of snapshot.assets) {
+          const raster = records.get(sprite.rasterResource.resourceId)?.raster;
+          invariant(raster?.kind === 'png' && (!sprite.sourceRect ||
+            (raster.width === sprite.sourceRect.width && raster.height === sprite.sourceRect.height)),
+            'Imported sprite PNG size does not match its source rectangle');
+          if (sprite.mask) {
+            const mask = records.get(sprite.mask.resourceId)?.raster;
+            invariant(sprite.mask.encoding === 'bitmap' && mask?.kind === 'mask' &&
+              mask.width === raster.width && mask.height === raster.height &&
+              mask.width === sprite.mask.width && mask.height === sprite.mask.height, 'Invalid imported mask');
+          }
+        }
+        const binary = tx.objectStore('resources');
+        for (const record of stage.records) {
+          await result(binary.add(record, resourceKey(projectId, record.version)));
+        }
+        await result(projects.add(snapshot, projectId));
+        await result(staging.delete(stageId));
+      });
+    } catch (error) {
+      try { await this.discardStage(projectId, stageId); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Import and staging cleanup failed'); }
+      throw error;
+    }
+  }
+
   async load(projectId: string, historyId?: string) {
     const tx = this.database.transaction(['projects', 'resources', 'history'], 'readonly');
     const snapshot = await atomic(tx, async () => {
