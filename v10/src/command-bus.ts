@@ -1,6 +1,6 @@
-import { applyRasterReplacement, rasterResourceIds, type RasterReplacement } from './raster-command.ts';
+import { applyRasterReplacement, rasterResourceIds, type RasterEdit, type RasterReplacement } from './raster-command.ts';
 import { SessionHistory, type HistoryDirection } from './session-history.ts';
-import type { ProjectDocument, SpriteAsset } from './domain.ts';
+import type { ProjectDocument, Rect, SpriteAsset } from './domain.ts';
 import { entities, invariant, resources, sameValue } from './project.ts';
 import { ConflictError, type CommitExpectation, type ProjectStore } from './project-store.ts';
 
@@ -51,7 +51,7 @@ type SpritePropertyChange = { spriteId: string; patch: PropertyPatch };
 type PropertyChanges = Map<string, PropertyPatch>;
 type HistoryChange =
   | { kind: 'properties'; undo: PropertyChanges; redo: PropertyChanges; bytes: 0 }
-  | { kind: 'raster'; spriteId: string; undo: RasterReplacement; redo: RasterReplacement; bytes: number };
+  | { kind: 'raster'; spriteId: string; undo: RasterEdit; redo: RasterEdit; bytes: number };
 type Applied = { history: HistoryChange; stageId?: string };
 
 function applyProperties(document: ProjectDocument, changes: PropertyChanges): Extract<HistoryChange, { kind: 'properties' }> {
@@ -124,9 +124,16 @@ export class CommandBus {
   }
 
   prepareSpriteRasterReplacement(snapshot: ProjectDocument, spriteId: string, patch: RasterReplacement): string {
+    return this.#prepareRaster(snapshot, spriteId, { png: patch.png, mask: patch.mask });
+  }
+
+  prepareSpriteCrop(snapshot: ProjectDocument, spriteId: string, crop: Rect, png: Blob): string {
+    return this.#prepareRaster(snapshot, spriteId, { crop: { ...crop }, png });
+  }
+
+  #prepareRaster(snapshot: ProjectDocument, spriteId: string, replacement: RasterEdit): string {
     invariant(this.#plans.size < 128, 'Too many pending commands');
     invariant(this.persistence.stage, 'This persistence adapter cannot stage resources');
-    const replacement = { png: patch.png, mask: patch.mask };
     invariant((replacement.png?.size ?? 0) + (replacement.mask?.size ?? 0) <= 1024 ** 3,
       'Raster replacement exceeds the byte limit');
     const operation: Operation = {
@@ -143,7 +150,7 @@ export class CommandBus {
   }
 
   async #applyRaster(document: ProjectDocument, existing: ReadonlyMap<string, Blob>,
-    spriteId: string, replacement: RasterReplacement): Promise<Applied> {
+    spriteId: string, replacement: RasterEdit): Promise<Applied> {
     const stage = this.persistence.stage?.bind(this.persistence);
     invariant(stage, 'This persistence adapter cannot stage resources');
     const change = await applyRasterReplacement(document, existing, spriteId, replacement, { stage });

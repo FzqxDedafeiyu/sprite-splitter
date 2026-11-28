@@ -379,8 +379,10 @@ async function rasterCommandTests() {
     start.revision++;
     const key = 'spriteAsset:' + id;
     start.assets.push({
-      id, name: '角色', category: 'character', revision: 1, contentVersion: 1, shape: 'rectangle',
-      sourceRectStatus: 'unknown', assetRef: 'sprites/角色.png', rasterResource: staged.versions[0],
+      id, name: '角色', category: 'character', revision: 1, contentVersion: 1, shape: 'polygon',
+      sourceRect: { x: 10, y: 20, width: 2, height: 2 },
+      points: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 2 }],
+      sourceRectStatus: 'known', assetRef: 'sprites/角色.png', rasterResource: staged.versions[0],
       mask: { ...staged.versions[1], assetRef: 'masks/角色.ssm', kind: 'mask', encoding: 'bitmap',
         coordinateSpace: 'spriteLocal', width: 2, height: 2 }
     });
@@ -428,7 +430,35 @@ async function rasterCommandTests() {
     const undo = await bus.undo(blank.projectId);
     equal(!undo.ok && [undo.error.code, undo.attempts], ['project-cas', 0]);
     equal((await store.load(blank.projectId))?.document.assets[0].mask?.revision, 4);
-    return { rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
+    const withRect = (await store.load(blank.projectId))!.document;
+    const widerCanvas = new OffscreenCanvas(3, 2);
+    const wideContext = widerCanvas.getContext('2d')!;
+    wideContext.fillStyle = '#f0a';
+    wideContext.fillRect(0, 0, 3, 2);
+    const widerPng = await widerCanvas.convertToBlob({ type: 'image/png' });
+    const badCrop = await bus.dispatch(bus.prepareSpriteCrop(withRect, id, { x: 9, y: 20, width: 4, height: 2 }, widerPng));
+    equal(badCrop.ok, false);
+    equal((await store.load(blank.projectId))?.document.revision, withRect.revision);
+    const crop = { x: 9, y: 20, width: 3, height: 2 };
+    const cropped = await bus.dispatch(bus.prepareSpriteCrop(withRect, id, crop, widerPng));
+    equal(cropped.ok, true);
+    const verifyCrop = async (rect: typeof crop, points: Array<{ x: number; y: number }>, samples: number[], advance: number) => {
+      const loaded = (await store.load(blank.projectId))!;
+      const asset = loaded.document.assets[0];
+      equal(loaded.document.revision, withRect.revision + advance);
+      equal(asset.contentVersion, withRect.assets[0].contentVersion + advance);
+      equal(asset.sourceRect, rect);
+      equal(asset.points, points);
+      const maskPixels = await decodeMask(loaded.bytes.get(maskId)!);
+      equal([maskPixels.width, maskPixels.height, ...maskPixels.samples], [rect.width, rect.height, ...samples]);
+    };
+    const shifted = [{ x: 1, y: 0 }, { x: 3, y: 0 }, { x: 1, y: 2 }];
+    await verifyCrop(crop, shifted, [255, 4, 3, 255, 2, 1], 1);
+    equal((await bus.undo(blank.projectId)).ok, true);
+    await verifyCrop(withRect.assets[0].sourceRect!, withRect.assets[0].points!, [4, 3, 2, 1], 2);
+    equal((await bus.redo(blank.projectId)).ok, true);
+    await verifyCrop(crop, shifted, [255, 4, 3, 255, 2, 1], 3);
+    return { cropMaskRoundTrip: 'pass', cropDimensionReject: 'pass', rasterAtomicity: 'pass', rasterUndoRedo: 'pass', rasterStaleReject: 'pass' };
   } finally { store.close(); indexedDB.deleteDatabase(db); }
 }
 
