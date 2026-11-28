@@ -1,3 +1,4 @@
+import { previewV9AgentAnnotations } from '../src/v9-agent.ts';
 import { exportV9Scene } from '../src/v9-export.ts';
 import { sameValue } from '../src/project.ts';
 import { CommandBus } from '../src/command-bus.ts';
@@ -89,9 +90,38 @@ async function verify() {
     await saveV9Migration(preview, store);
     store.close();
     store = await ProjectStore.open(db);
-    const loaded = await store.load(migrated.projectId);
+    let loaded = await store.load(migrated.projectId);
     assert(loaded?.bytes.size === 30 && loaded.document.assets.every((item, index) =>
       item.id === migrated.assets[index].id), 'UUID or raster was regenerated after reopen');
+    const agentResult = await fetch('/a009-agent-result.json').then(response => {
+      if (!response.ok) throw new Error('A-009 Agent fixture missing');
+      return response.json();
+    });
+    const annotations = previewV9AgentAnnotations(loaded!.document, agentResult);
+    assert(annotations.edits.length === 30 && annotations.edits.every(edit => loaded!.document.assets.some(item => item.id === edit.spriteId)),
+      'Agent fixture did not resolve all real V9 IDs');
+    const firstId = loaded!.document.assets[0].id;
+    const v1 = previewV9AgentAnnotations(loaded!.document, { schema: 'sprite-agent-result/v1', sprites: [
+      { id: 'sprite_001', tags: ['旧版'], review_status: 'needs_review',
+        relations: { near_to: ['sprite_002'], attached_to: ['not-mapped'] } }
+    ] });
+    assert(v1.edits[0].spriteId === firstId && v1.edits[0].annotation.reviewStatus === 'needs_review' &&
+      v1.proposals[0].relations?.nearTo[0] === loaded!.document.assets[1].id &&
+      v1.warnings.some(message => message.code === 'unresolved-relation'), 'V1 aliases failed to resolve');
+
+    const duplicate = previewV9AgentAnnotations(loaded!.document, { schema: 'sprite-agent-result/v1',
+      sprites: [{ id: 'sprite_001', tags: ['A'] }, { id: 'sprite_001', tags: ['B'] }] });
+    assert(duplicate.edits.length === 0 && duplicate.warnings.every(item => item.code === 'duplicate-target'),
+      'Duplicate Agent rows should never select a winner');
+    const annotationCommand = new CommandBus(store, () => {});
+    const annotated = await annotationCommand.dispatch(annotationCommand.prepareAgentAnnotationImport(loaded!.document, annotations.edits));
+    assert(annotated.ok, 'Could not apply the V9 Agent annotation batch');
+    const persistedAnnotations = (await store.load(migrated.projectId))!.document;
+    assert(persistedAnnotations.assets[0].agentAnnotation?.tags.includes('浮岛') &&
+      sameValue(persistedAnnotations.sceneLayout, loaded!.document.sceneLayout), 'Annotation import changed editor layout');
+    assert((await annotationCommand.undo(migrated.projectId)).ok, 'Agent annotations should be reversible');
+    loaded = (await store.load(migrated.projectId))!;
+
     const originalExport = await exportV9Scene(loaded!.document, loaded!.bytes);
     const reopenedExport = await readV9Archive(originalExport.archive);
     assert(sameValue(reopenedExport.manifest, manifest), 'Frozen V9 Manifest fields changed on round trip');
@@ -122,7 +152,7 @@ async function verify() {
       assert(data.every((byte, index) => index % 4 !== 3 || byte === 0), 'V9 PNG export ignored effective mask alpha');
     } finally { bitmap.close(); }
   } finally { store.close(); indexedDB.deleteDatabase(db); }
-  return { v9FrozenManifestRoundTrip: 'pass', v9MaskedExport: 'pass', v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
+  return { v9AgentAnnotationAdapter: 'pass', v9FrozenManifestRoundTrip: 'pass', v9MaskedExport: 'pass', v9MigrationPreview: 'pass', v9MigrationQuarantine: 'pass', v9MigrationReopen: 'pass', realV9Sprites: files.size, chineseNames: 'pass', deflate: 'pass',
     corruptCrc: 'pass', truncated: 'pass', pathTraversal: 'pass' };
 }
 verify().then(value => {

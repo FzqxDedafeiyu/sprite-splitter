@@ -29,6 +29,7 @@ const v9Fixture = await build({
   entryPoints: [fileURLToPath(new URL('./v9-archive.browser.ts', import.meta.url))],
   bundle: true, write: false, format: 'esm'
 });
+const agentFixture = await readFile(new URL('../../docs/v10/phase-0/results/A-009-agent-json-roundtrip/agent_result.json', import.meta.url));
 const v9Archive = await readFile(new URL('../../docs/v10/phase-0/results/A-010-v9-export-check.zip', import.meta.url));
 
 function deflatedManifest() {
@@ -64,7 +65,10 @@ function deflatedManifest() {
 const deflatedArchive = deflatedManifest();
 const html = '<!doctype html><meta charset="utf-8"><pre id="result">pending</pre>';
 const server = createServer((request, response) => {
-  if (request.url === '/a010.zip' || request.url === '/deflated.zip') {
+  if (request.url === '/a009-agent-result.json') {
+    response.setHeader('content-type', 'application/json; charset=utf-8');
+    response.end(agentFixture);
+  } else if (request.url === '/a010.zip' || request.url === '/deflated.zip') {
     response.setHeader('content-type', 'application/zip');
     response.end(request.url === '/a010.zip' ? v9Archive : deflatedArchive);
   } else if (request.url === '/v9.js') {
